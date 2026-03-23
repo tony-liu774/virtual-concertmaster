@@ -1,16 +1,42 @@
-# React + Vite
+# 🎻 The Virtual Concertmaster
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+AI-powered practice companion for classical string players (Violin, Viola, Cello, Double Bass).
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | Vite 8 + React 19 |
+| **Styling** | Tailwind CSS v4 (CSS-first, `@theme` only) |
+| **Desktop** | Tauri 2 (macOS / Windows) |
+| **State** | Zustand (planned) |
+| **Audio** | Web Audio API + Web Workers (planned) |
+| **Backend** | Supabase (planned) |
 
-## React Compiler
+## Design System: "Midnight Conservatory"
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+All theme tokens live in `src/index.css` via Tailwind v4's `@theme` directive.
+**No `tailwind.config.js`. No inline hex codes. Ever.**
 
-## Expanding the ESLint configuration
+## Getting Started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+# Install dependencies
+npm install
+
+# Run web dev server
+npm run dev
+
+# Run Tauri desktop app (requires Rust)
+npm run tauri dev
+
+# Build for production
+npm run build
+```
+
+## Routes
+
+| Path | Description |
+|------|-------------|
+| `/` | Home / Landing |
+| `/sandbox` | Design System Sandbox (component library) |

@@ -1,14 +1,24 @@
+/* ═══════════════════════════════════════════════════════════
+   🎻 THE MIDNIGHT CONSERVATORY — Design System
+   Tailwind CSS v4 | CSS-First Configuration
+   NO tailwind.config.js. All theming lives here.
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Google Fonts (must precede @import "tailwindcss") ──── */
+@import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Source+Sans+3:wght@300;400;500;600;700&display=swap");
+
 @import "tailwindcss";
 
+/* ── Theme Tokens ───────────────────────────────────────── */
 @theme {
   /* Core Backgrounds */
-  --color-bg-deep: #0a0a12;   /* Oxford Blue: The global background */
-  --color-bg-panel: #14141f;   /* Slightly lighter for cards/modals */
+  --color-bg-deep: #0a0a12;     /* Oxford Blue: The global background */
+  --color-bg-panel: #14141f;    /* Slightly lighter for cards/modals */
 
   /* Accents & UI */
-  --color-accent-amber: #c9a227; /* Polished Amber: Cursors, active buttons */
-  --color-text-primary: #f3f4f6; /* Soft Ivory: Notation and main text */
-  --color-text-muted: #9ca3af;   /* Gray for secondary info */
+  --color-accent-amber: #c9a227;  /* Polished Amber: Cursors, active buttons */
+  --color-text-primary: #f3f4f6;  /* Soft Ivory: Notation and main text */
+  --color-text-muted: #9ca3af;    /* Gray for secondary info */
 
   /* Feedback States */
   --color-feedback-success: #10b981; /* Emerald: Perfect pitch */
@@ -20,17 +30,38 @@
 
   /* Custom Animations */
   --animate-breath: breath 4s ease-in-out infinite;
+  --animate-glow-pulse: glow-pulse 2s ease-in-out infinite;
 }
 
+/* ── Keyframes ──────────────────────────────────────────── */
 @keyframes breath {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
 
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 8px var(--color-accent-amber); }
+  50% { box-shadow: 0 0 20px var(--color-accent-amber), 0 0 40px var(--color-accent-amber); }
+}
+
+/* ── Global Reset & Base Styles ─────────────────────────── */
 body {
   background-color: var(--color-bg-deep);
   color: var(--color-text-primary);
   font-family: var(--font-body);
   margin: 0;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 🛑 SVG & Image Safety Net — prevent DOM blowout */
+svg, img {
+  max-width: 100%;
+  height: auto;
+}
+
+canvas {
+  max-width: 100%;
+  max-height: 100%;
 }
