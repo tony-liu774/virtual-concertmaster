@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+@theme {
+  /* Core Backgrounds */
+  --color-bg-deep: #0a0a12;   /* Oxford Blue: The global background */
+  --color-bg-panel: #14141f;   /* Slightly lighter for cards/modals */
+
+  /* Accents & UI */
+  --color-accent-amber: #c9a227; /* Polished Amber: Cursors, active buttons */
+  --color-text-primary: #f3f4f6; /* Soft Ivory: Notation and main text */
+  --color-text-muted: #9ca3af;   /* Gray for secondary info */
+
+  /* Feedback States */
+  --color-feedback-success: #10b981; /* Emerald: Perfect pitch */
+  --color-feedback-error: #dc2626;   /* Crimson: Out of tune / Heatmap */
+
+  /* Typography */
+  --font-header: "Playfair Display", serif;
+  --font-body: "Source Sans 3", sans-serif;
+
+  /* Custom Animations */
+  --animate-breath: breath 4s ease-in-out infinite;
+}
+
+@keyframes breath {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+body {
+  background-color: var(--color-bg-deep);
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  margin: 0;
+  min-height: 100vh;
+}
