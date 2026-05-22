@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', '.venv-omr']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [
@@ -30,6 +30,12 @@ export default defineConfig([
       'react-hooks/immutability': 'off',
       'react-hooks/set-state-in-effect': 'off',
       'react-refresh/only-export-components': 'off',
+    },
+  },
+  {
+    files: ['server/**/*.js'],
+    languageOptions: {
+      globals: globals.node,
     },
   },
 ])
