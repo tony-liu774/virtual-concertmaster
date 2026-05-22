@@ -1,14 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import JSZip from 'jszip';
 import {
   Search, Music2, ChevronRight, Loader2,
   Layers, FileMusic, AlertCircle, CheckCircle2,
-  Upload, ScanLine, Cpu,
+  ScanLine, Cpu,
 } from 'lucide-react';
 import { PIECES_LIST }                     from '../utils/samplePieces.js';
 import { useInstrumentStore }              from '../store/instrumentStore.js';
 import { parseMusicXml }                   from '../utils/musicXmlParser.js';
 import { checkServerHealth, scanSheetMusicImage } from '../utils/omrClient.js';
+import { evaluateScanQuality }             from '../utils/scanQuality.js';
+import OsmdViewer                          from '../components/OsmdViewer.jsx';
 
 // ── Constants ─────────────────────────────────────────────────────
 
@@ -23,6 +26,23 @@ const DIFFICULTY_COLOR = {
 
 const INSTR_LABEL = {
   violin: 'Violin', viola: 'Viola', cello: 'Cello', bass: 'Double Bass',
+};
+
+const CLEF_OPTIONS = ['treble', 'alto', 'bass'];
+
+const QUALITY_BADGE = {
+  pass: {
+    label: 'Ready',
+    className: 'border-feedback-success/40 text-feedback-success bg-feedback-success/10',
+  },
+  review: {
+    label: 'Review',
+    className: 'border-accent-amber/40 text-accent-amber bg-accent-amber/10',
+  },
+  fail: {
+    label: 'Blocked',
+    className: 'border-feedback-error/40 text-feedback-error bg-feedback-error/10',
+  },
 };
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -41,6 +61,15 @@ function readFileAsText(file) {
   });
 }
 
+function readFileAsArrayBuffer(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = (e) => resolve(e.target.result);
+    reader.onerror = () => reject(new Error('FileReader error'));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -56,6 +85,37 @@ function readFileAsBase64(file) {
   });
 }
 
+function parseMxlRootPath(containerXml) {
+  if (!containerXml) return '';
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(containerXml, 'application/xml');
+  return doc.querySelector('rootfile')?.getAttribute('full-path') ?? '';
+}
+
+async function readMusicXmlFromFile(file) {
+  const name = file.name.toLowerCase();
+  if (!name.endsWith('.mxl')) return readFileAsText(file);
+
+  const buffer = await readFileAsArrayBuffer(file);
+  const zip = await JSZip.loadAsync(buffer);
+  const container = zip.file('META-INF/container.xml');
+  const rootPath = container ? parseMxlRootPath(await container.async('text')) : '';
+  const normalizedRootPath = rootPath.replace(/^\/+/, '');
+
+  const xmlFile = (normalizedRootPath && zip.file(normalizedRootPath)) ||
+    Object.values(zip.files).find(entry =>
+      !entry.dir &&
+      /\.(musicxml|xml)$/i.test(entry.name) &&
+      !/META-INF\/container\.xml$/i.test(entry.name),
+    );
+
+  if (!xmlFile) {
+    throw new Error('The compressed MusicXML file did not contain a readable score.');
+  }
+
+  return xmlFile.async('text');
+}
+
 // ── Component ─────────────────────────────────────────────────────
 
 export default function Library() {
@@ -64,7 +124,8 @@ export default function Library() {
 
   const [query,       setQuery]       = useState('');
   const [filterInstr, setFilterInstr] = useState('All');
-  const fileInputRef  = useRef(null);
+  const xmlInputRef   = useRef(null);
+  const imageInputRef = useRef(null);
 
   // ── Server / engine health ────────────────────────────────────
   // null = not yet checked, false = offline, object = health payload
@@ -75,13 +136,19 @@ export default function Library() {
   }, []);
 
   // ── Upload state machine ──────────────────────────────────────
-  // 'idle' | 'reading' | 'scanning' | 'success' | 'error'
+  // 'idle' | 'reading' | 'scanning' | 'review' | 'success' | 'error'
   const [uploadState,   setUploadState]   = useState('idle');
   const [uploadFile,    setUploadFile]    = useState('');
   const [uploadMessage, setUploadMessage] = useState('');
+  const [pendingScan,   setPendingScan]   = useState(null);
+  const [reviewEdits,   setReviewEdits]   = useState({ title: '', composer: '', clef: 'treble', bpm: 80 });
 
   // ── Persisted uploads ─────────────────────────────────────────
   const [uploadedSongs, setUploadedSongs] = useState(loadSavedUploads);
+
+  useEffect(() => () => {
+    if (pendingScan?.imageUrl) URL.revokeObjectURL(pendingScan.imageUrl);
+  }, [pendingScan?.imageUrl]);
 
   const allSongs = [...uploadedSongs, ...PIECES_LIST];
 
@@ -108,6 +175,7 @@ export default function Library() {
   // ── MusicXML direct import (.xml / .musicxml) ─────────────────
   async function handleXmlImport(file) {
     setUploadState('reading');
+    setPendingScan(null);
 
     if (file.size > 20 * 1024 * 1024) {
       setUploadState('error');
@@ -116,7 +184,7 @@ export default function Library() {
     }
 
     let xmlText;
-    try { xmlText = await readFileAsText(file); }
+    try { xmlText = await readMusicXmlFromFile(file); }
     catch {
       setUploadState('error');
       setUploadMessage('Could not read the file.');
@@ -126,7 +194,7 @@ export default function Library() {
     const trimmed = xmlText.trimStart();
     if (!trimmed.startsWith('<?xml') && !trimmed.startsWith('<score-')) {
       setUploadState('error');
-      setUploadMessage('This does not look like a MusicXML file. Make sure you exported as .musicxml (uncompressed) from your notation software.');
+      setUploadMessage('This does not look like a MusicXML file. Upload .musicxml, .xml, or compressed .mxl.');
       return;
     }
 
@@ -161,6 +229,8 @@ export default function Library() {
 
   // ── Image scan via OMR server (.png / .jpg / .webp) ───────────
   async function handleImageScan(file) {
+    setPendingScan(null);
+
     // Re-check server health before starting a potentially slow scan
     const health = await checkServerHealth();
     setServerHealth(health);
@@ -210,19 +280,38 @@ export default function Library() {
       return;
     }
 
-    persistPiece(result.piece);
-
     const { piece } = result;
     const noteCount = piece.measures.reduce((s, m) => s + m.length, 0);
-    setUploadState('success');
+    const imageUrl = URL.createObjectURL(file);
+    const quality = evaluateScanQuality(piece, { expectedInstrument: activeInstrument });
+
+    setReviewEdits({
+      title:    piece.title,
+      composer: piece.composer,
+      clef:     piece.clef,
+      bpm:      piece.bpm,
+    });
+    setPendingScan({ piece, imageUrl, quality, filename: file.name });
+    setUploadState('review');
     setUploadMessage(
-      `"${piece.title}" scanned via ${piece.scannedBy} — ` +
-      `${piece.measures.length} measures, ${noteCount} tracked notes`,
+      quality.status === 'fail'
+        ? `"${file.name}" scanned, but the result failed quality checks.`
+        : `"${piece.title}" scanned via ${piece.scannedBy} — ${piece.measures.length} measures, ${noteCount} tracked notes. Review before importing.`,
     );
   }
 
-  // ── Unified file-change handler ───────────────────────────────
-  async function handleFileUpload(e) {
+  // ── File-change handlers ──────────────────────────────────────
+  async function handleXmlFileUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+
+    setUploadFile(file.name);
+    setUploadMessage('');
+    await handleXmlImport(file);
+  }
+
+  async function handleImageFileUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
     e.target.value = '';
@@ -232,21 +321,35 @@ export default function Library() {
 
     const name = file.name.toLowerCase();
 
-    if (name.endsWith('.musicxml') || name.endsWith('.xml')) {
-      await handleXmlImport(file);
-    } else if (name.endsWith('.mxl')) {
-      setUploadState('error');
-      setUploadMessage(
-        '.mxl files are ZIP-compressed and cannot be read directly.\n' +
-        'In your notation software use File → Export → MusicXML (uncompressed) ' +
-        'to save a .musicxml file, then import that.',
-      );
-    } else if (name.match(/\.(png|jpg|jpeg|webp)$/)) {
+    if (name.match(/\.(png|jpg|jpeg|webp)$/)) {
       await handleImageScan(file);
     } else {
       setUploadState('error');
-      setUploadMessage('Unsupported file type. Upload a .musicxml, .xml, PNG, JPG, or WebP file.');
+      setUploadMessage('Unsupported file type. Upload a PNG, JPG, or WebP file for hybrid scan.');
     }
+  }
+
+  function discardPendingScan() {
+    setPendingScan(null);
+    setUploadState('idle');
+    setUploadMessage('');
+  }
+
+  function approvePendingScan() {
+    if (!pendingScan || pendingScan.quality.status === 'fail') return;
+    const piece = {
+      ...pendingScan.piece,
+      title:    reviewEdits.title.trim() || pendingScan.piece.title,
+      composer: reviewEdits.composer.trim() || 'Unknown',
+      clef:     reviewEdits.clef || pendingScan.piece.clef,
+      bpm:      Number(reviewEdits.bpm) || pendingScan.piece.bpm,
+      scanQuality: pendingScan.quality,
+      reviewedAt:  new Date().toISOString(),
+    };
+    persistPiece(piece);
+    setPendingScan(null);
+    setUploadState('success');
+    setUploadMessage(`"${piece.title}" imported after review.`);
   }
 
   // ── Navigate to Practice ──────────────────────────────────────
@@ -265,7 +368,12 @@ export default function Library() {
     scanning: {
       style: 'bg-accent-amber/10 border-accent-amber/30 text-accent-amber',
       icon:  <Loader2 size={16} className="animate-spin flex-shrink-0" />,
-      text:  `OMR engine scanning "${uploadFile}" — this may take 30–120 seconds…`,
+      text:  `Hybrid scan reading "${uploadFile}" — this can take several minutes locally…`,
+    },
+    review: {
+      style: 'bg-accent-amber/10 border-accent-amber/30 text-accent-amber',
+      icon:  <ScanLine size={16} className="flex-shrink-0" />,
+      text:  uploadMessage,
     },
     success: {
       style: 'bg-feedback-success/10 border-feedback-success/30 text-feedback-success',
@@ -280,6 +388,10 @@ export default function Library() {
   };
   const banner = bannerMap[uploadState];
   const busy   = uploadState === 'reading' || uploadState === 'scanning';
+  const quality = pendingScan?.quality;
+  const qualityBadge = quality ? QUALITY_BADGE[quality.status] : null;
+  const qualityFindings = quality ? [...quality.issues, ...quality.warnings] : [];
+  const canApproveScan = !!pendingScan && quality?.status !== 'fail';
 
   // Engine status chip
   const engineChip = (() => {
@@ -307,7 +419,7 @@ export default function Library() {
         </p>
       </div>
 
-      {/* ── Search + Upload row ─────────────────────────────────── */}
+      {/* ── Search + Import row ─────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row gap-3 mb-3">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -321,23 +433,40 @@ export default function Library() {
         </div>
 
         <button
-          onClick={() => { if (!busy) { setUploadState('idle'); fileInputRef.current?.click(); } }}
+          onClick={() => { if (!busy) { setUploadState('idle'); xmlInputRef.current?.click(); } }}
           disabled={busy}
-          className="flex items-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-2.5 rounded-lg hover:shadow-[0_0_20px_rgba(201,162,39,0.5)] transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 bg-bg-panel border border-white/10 text-text-primary font-body font-semibold px-5 py-2.5 rounded-lg hover:border-accent-amber/50 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {busy
             ? <Loader2  size={15} className="animate-spin" />
-            : <Upload   size={15} />}
-          {uploadState === 'scanning' ? 'Scanning…' : busy ? 'Reading…' : 'Import / Scan'}
+            : <FileMusic size={15} />}
+          {busy ? 'Reading…' : 'Upload MusicXML'}
         </button>
 
-        {/* Accepts both MusicXML and image files */}
+        <button
+          onClick={() => { if (!busy) { setUploadState('idle'); imageInputRef.current?.click(); } }}
+          disabled={busy}
+          className="flex items-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-2.5 rounded-lg hover:shadow-[0_0_20px_rgba(201,162,39,0.5)] transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {uploadState === 'scanning'
+            ? <Loader2  size={15} className="animate-spin" />
+            : <ScanLine size={15} />}
+          {uploadState === 'scanning' ? 'Scanning…' : 'Hybrid Scan'}
+        </button>
+
         <input
-          ref={fileInputRef}
+          ref={xmlInputRef}
           type="file"
-          accept=".xml,.musicxml,.mxl,image/png,image/jpeg,image/jpg,image/webp"
+          accept=".xml,.musicxml,.mxl"
           className="hidden"
-          onChange={handleFileUpload}
+          onChange={handleXmlFileUpload}
+        />
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/jpg,image/webp"
+          className="hidden"
+          onChange={handleImageFileUpload}
         />
       </div>
 
@@ -345,9 +474,9 @@ export default function Library() {
       <div className="flex flex-wrap items-center gap-3 mb-5">
         <p className="text-text-muted/50 font-body text-xs flex items-center gap-1.5">
           <FileMusic size={11} />
-          <span className="text-text-muted">.musicxml / .xml</span> — direct import, no processing ·
+          <span className="text-text-muted">MusicXML</span> — instant and most accurate ·
           <ScanLine size={11} className="ml-1" />
-          <span className="text-text-muted">PNG / JPG</span> — OMR engine scan
+          <span className="text-text-muted">Screenshot/photo</span> — hybrid OMR with review gate
         </p>
         {engineChip && (
           <span className={`flex items-center gap-1 text-[10px] font-body px-2 py-0.5 rounded-full border ${engineChip.color}`}>
@@ -368,6 +497,149 @@ export default function Library() {
             >✕</button>
           )}
         </div>
+      )}
+
+      {/* ── Hybrid scan review ──────────────────────────────────── */}
+      {pendingScan && (
+        <section className="mb-6 rounded-xl border border-white/10 bg-bg-panel/80 overflow-hidden">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 py-3 border-b border-white/10">
+            <div className="min-w-0">
+              <p className="text-text-muted font-body text-[10px] uppercase tracking-widest">Hybrid Scan Review</p>
+              <h2 className="font-header text-xl text-text-primary truncate">{reviewEdits.title || pendingScan.piece.title}</h2>
+              <p className="text-text-muted/70 font-body text-xs truncate">{pendingScan.filename}</p>
+            </div>
+            {qualityBadge && (
+              <span className={`inline-flex items-center gap-2 self-start md:self-center px-3 py-1 rounded-full border text-xs font-body font-semibold ${qualityBadge.className}`}>
+                {quality.status === 'pass' ? <CheckCircle2 size={13} /> : <AlertCircle size={13} />}
+                {qualityBadge.label} · {quality.score}/100
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,0.85fr)_minmax(360px,1.15fr)] gap-4 p-4">
+            <div className="min-w-0">
+              <p className="text-text-muted font-body text-[10px] uppercase tracking-widest mb-2">Original Image</p>
+              <div className="bg-white rounded-lg overflow-auto max-h-[440px] border border-white/10">
+                <img
+                  src={pendingScan.imageUrl}
+                  alt="Original scanned sheet music"
+                  className="w-full min-w-[320px] object-contain"
+                />
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-text-muted font-body text-[10px] uppercase tracking-widest mb-2">Parsed Score</p>
+              <OsmdViewer
+                musicXml={pendingScan.piece.musicXmlString}
+                className="max-h-[440px] overflow-auto border border-white/10 rounded-lg"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,0.75fr)_minmax(320px,1fr)] gap-4 px-4 pb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="font-body text-xs text-text-muted">
+                Title
+                <input
+                  value={reviewEdits.title}
+                  onChange={e => setReviewEdits(prev => ({ ...prev, title: e.target.value }))}
+                  className="mt-1 w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-amber/60"
+                />
+              </label>
+              <label className="font-body text-xs text-text-muted">
+                Composer
+                <input
+                  value={reviewEdits.composer}
+                  onChange={e => setReviewEdits(prev => ({ ...prev, composer: e.target.value }))}
+                  className="mt-1 w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-amber/60"
+                />
+              </label>
+              <label className="font-body text-xs text-text-muted">
+                Clef
+                <select
+                  value={reviewEdits.clef}
+                  onChange={e => setReviewEdits(prev => ({ ...prev, clef: e.target.value }))}
+                  className="mt-1 w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2 text-sm text-text-primary capitalize focus:outline-none focus:border-accent-amber/60"
+                >
+                  {CLEF_OPTIONS.map(clef => (
+                    <option key={clef} value={clef}>{clef}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="font-body text-xs text-text-muted">
+                BPM
+                <input
+                  type="number"
+                  min="30"
+                  max="240"
+                  value={reviewEdits.bpm}
+                  onChange={e => setReviewEdits(prev => ({ ...prev, bpm: e.target.value }))}
+                  className="mt-1 w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent-amber/60"
+                />
+              </label>
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-bg-deep/60 p-3">
+              <p className="text-text-muted font-body text-[10px] uppercase tracking-widest mb-2">Quality Checks</p>
+              {qualityFindings.length > 0 ? (
+                <ul className="space-y-2">
+                  {quality.issues.map(item => (
+                    <li key={`issue-${item}`} className="flex gap-2 text-feedback-error font-body text-xs">
+                      <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                  {quality.warnings.map(item => (
+                    <li key={`warning-${item}`} className="flex gap-2 text-accent-amber font-body text-xs">
+                      <AlertCircle size={13} className="mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="flex items-center gap-2 text-feedback-success font-body text-xs">
+                  <CheckCircle2 size={13} /> No blocking scan problems found.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 px-4 py-3 border-t border-white/10">
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                {quality.metrics.measureCount} measures
+              </span>
+              <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                {quality.metrics.noteCount} notes
+              </span>
+              <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                {quality.metrics.averageNotesPerMeasure} notes/measure
+              </span>
+              {quality.metrics.repairedRhythms > 0 && (
+                <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-accent-amber/30 text-accent-amber">
+                  {quality.metrics.repairedRhythms} rhythm repairs
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={discardPendingScan}
+                className="px-4 py-2 rounded-lg border border-white/10 text-text-muted font-body text-sm hover:border-white/25 hover:text-text-primary transition-colors"
+              >
+                Discard
+              </button>
+              <button
+                onClick={approvePendingScan}
+                disabled={!canApproveScan}
+                className="px-4 py-2 rounded-lg bg-accent-amber text-bg-deep font-body font-semibold text-sm hover:shadow-[0_0_20px_rgba(201,162,39,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Approve Import
+              </button>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* ── Instrument filter chips ──────────────────────────────── */}
