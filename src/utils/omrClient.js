@@ -80,7 +80,7 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
     return { success: false, error: data.error ?? 'OMR processing failed.' };
   }
 
-  const { musicXmlString, engine, warning, inspection } = data;
+  const { musicXmlString, engine, preprocessing, warning, inspection } = data;
 
   if (!musicXmlString || typeof musicXmlString !== 'string' || musicXmlString.length < 100) {
     return { success: false, error: 'Server returned an empty MusicXML document.' };
@@ -108,6 +108,7 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
       isUploaded:     true,
       uploadedAt:     new Date().toISOString(),
       scannedBy:      engine,             // 'oemer' | 'audiveris' | 'remote'
+      preprocessing:  preprocessing || 'original',
       engineWarning:  warning ?? '',
       engineInspection: inspection ?? null,
       musicXmlString,                     // OSMD renders this directly

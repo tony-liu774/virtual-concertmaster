@@ -107,6 +107,7 @@ app.post('/api/omr-scan', async (req, res) => {
     success:        true,
     musicXmlString: result.musicXmlString,
     engine:         result.engine,
+    preprocessing:  result.preprocessing,
     warning:        result.warning || undefined,
     inspection:     result.inspection,
   });

@@ -25,6 +25,7 @@ import fs                 from 'fs';
 import path               from 'path';
 import os                 from 'os';
 import JSZip              from 'jszip';
+import { makeOmrImageVariants, cleanupOmrImageVariants } from './imagePreprocessor.js';
 
 const execAsync = promisify(exec);
 
@@ -108,17 +109,30 @@ function inspectMusicXml(xml) {
   };
 }
 
-function buildCandidate(engine, xml) {
+function buildCandidate(engine, xml, preprocessing = 'original') {
   const inspection = inspectMusicXml(xml);
   return {
     success: true,
     musicXmlString: xml,
     engine,
+    preprocessing,
     warning: inspection.suspicious
-      ? `${engine} produced suspicious MusicXML: ${inspection.reason}`
+      ? `${engine} (${preprocessing}) produced suspicious MusicXML: ${inspection.reason}`
       : '',
     inspection,
   };
+}
+
+function candidateScore(candidate) {
+  const i = candidate?.inspection ?? {};
+  let score = 0;
+  if (!i.suspicious) score += 1000;
+  score += Math.min(i.measures ?? 0, 64) * 10;
+  score += Math.min(i.playableNotes ?? 0, 240);
+  if ((i.averageNotesPerMeasure ?? 0) > 18) score -= 400;
+  if ((i.maxNotesInMeasure ?? 0) > 32) score -= 400;
+  if ((i.playableNotes ?? 0) === 0) score -= 600;
+  return score;
 }
 
 async function runOemer(imagePath) {
@@ -255,64 +269,77 @@ export async function processOMR({ imagePath, base64, mediaType }) {
   let suspiciousCandidate = null;
   const oemerCmd     = process.env.OEMER_CLI     || 'oemer';
   const audiverisCmd = process.env.AUDIVERIS_CLI || 'audiveris';
+  const { variants, warning: preprocessingWarning } = await makeOmrImageVariants(imagePath);
 
-  function acceptOrFallback(engine, xml) {
-    const candidate = buildCandidate(engine, xml);
+  if (preprocessingWarning) errors.push(`Preprocessing: ${preprocessingWarning}`);
+
+  function acceptOrFallback(engine, xml, preprocessing = 'original') {
+    const candidate = buildCandidate(engine, xml, preprocessing);
     if (!candidate.inspection.suspicious) return candidate;
 
     console.warn(`[OMR] ${candidate.warning}; trying fallback if available.`);
     errors.push(`${engine}: ${candidate.inspection.reason}`);
-    suspiciousCandidate ??= candidate;
+    if (!suspiciousCandidate || candidateScore(candidate) > candidateScore(suspiciousCandidate)) {
+      suspiciousCandidate = candidate;
+    }
     return null;
   }
 
-  // ── 1. Oemer ───────────────────────────────────────────────────
-  if (isCommandAvailable(oemerCmd)) {
-    try {
-      console.log('[OMR] Trying Oemer…');
-      const xml = await runOemer(imagePath);
-      console.log('[OMR] Oemer succeeded.');
-      const candidate = acceptOrFallback('oemer', xml);
-      if (candidate) return candidate;
-    } catch (err) {
-      console.warn('[OMR] Oemer failed:', err.message);
-      errors.push(`Oemer: ${err.message}`);
+  try {
+    // ── 1. Oemer ───────────────────────────────────────────────────
+    if (isCommandAvailable(oemerCmd)) {
+      for (const variant of variants) {
+        try {
+          console.log(`[OMR] Trying Oemer (${variant.label})…`);
+          const xml = await runOemer(variant.path);
+          console.log(`[OMR] Oemer succeeded (${variant.label}).`);
+          const candidate = acceptOrFallback('oemer', xml, variant.label);
+          if (candidate) return candidate;
+        } catch (err) {
+          console.warn(`[OMR] Oemer failed (${variant.label}):`, err.message);
+          errors.push(`Oemer (${variant.label}): ${err.message}`);
+        }
+      }
+    } else {
+      errors.push('Oemer: command not found (pip install oemer)');
     }
-  } else {
-    errors.push('Oemer: command not found (pip install oemer)');
-  }
 
-  // ── 2. Audiveris ───────────────────────────────────────────────
-  if (isCommandAvailable(audiverisCmd)) {
-    try {
-      console.log('[OMR] Trying Audiveris…');
-      const xml = await runAudiveris(imagePath);
-      console.log('[OMR] Audiveris succeeded.');
-      const candidate = acceptOrFallback('audiveris', xml);
-      if (candidate) return candidate;
-    } catch (err) {
-      console.warn('[OMR] Audiveris failed:', err.message);
-      errors.push(`Audiveris: ${err.message}`);
+    // ── 2. Audiveris ───────────────────────────────────────────────
+    if (isCommandAvailable(audiverisCmd)) {
+      for (const variant of variants) {
+        try {
+          console.log(`[OMR] Trying Audiveris (${variant.label})…`);
+          const xml = await runAudiveris(variant.path);
+          console.log(`[OMR] Audiveris succeeded (${variant.label}).`);
+          const candidate = acceptOrFallback('audiveris', xml, variant.label);
+          if (candidate) return candidate;
+        } catch (err) {
+          console.warn(`[OMR] Audiveris failed (${variant.label}):`, err.message);
+          errors.push(`Audiveris (${variant.label}): ${err.message}`);
+        }
+      }
+    } else {
+      errors.push('Audiveris: command not found (brew install audiveris)');
     }
-  } else {
-    errors.push('Audiveris: command not found (brew install audiveris)');
-  }
 
-  // ── 3. Remote endpoint ─────────────────────────────────────────
-  if (process.env.OMR_ENDPOINT) {
-    try {
-      console.log('[OMR] Trying remote endpoint:', process.env.OMR_ENDPOINT);
-      const xml = await callRemoteEndpoint(base64, mediaType);
-      console.log('[OMR] Remote endpoint succeeded.');
-      const candidate = acceptOrFallback('remote', xml);
-      if (candidate) return candidate;
-    } catch (err) {
-      console.warn('[OMR] Remote endpoint failed:', err.message);
-      errors.push(`Remote (${process.env.OMR_ENDPOINT}): ${err.message}`);
+    // ── 3. Remote endpoint ─────────────────────────────────────────
+    if (process.env.OMR_ENDPOINT) {
+      try {
+        console.log('[OMR] Trying remote endpoint:', process.env.OMR_ENDPOINT);
+        const xml = await callRemoteEndpoint(base64, mediaType);
+        console.log('[OMR] Remote endpoint succeeded.');
+        const candidate = acceptOrFallback('remote', xml);
+        if (candidate) return candidate;
+      } catch (err) {
+        console.warn('[OMR] Remote endpoint failed:', err.message);
+        errors.push(`Remote (${process.env.OMR_ENDPOINT}): ${err.message}`);
+      }
     }
+
+    if (suspiciousCandidate) return suspiciousCandidate;
+
+    return { success: false, error: buildInstallError(errors) };
+  } finally {
+    cleanupOmrImageVariants(variants);
   }
-
-  if (suspiciousCandidate) return suspiciousCandidate;
-
-  return { success: false, error: buildInstallError(errors) };
 }
