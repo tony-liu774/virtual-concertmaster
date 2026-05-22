@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Component } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Play, Square, SkipForward, ChevronDown, Mic2, MicOff, Volume2, VolumeX, PlayCircle } from 'lucide-react';
+import { AlertCircle, Play, Square, SkipForward, ChevronDown, Mic2, MicOff, Volume2, VolumeX, PlayCircle } from 'lucide-react';
 import { useAudioAnalyzer } from '../hooks/useAudioAnalyzer.js';
 import { useSynthTone } from '../utils/synthTone.js';
 import { useInstrumentStore } from '../store/instrumentStore.js';
 import { intonationState, INSTRUMENT_RANGES, midiToFreq, OPEN_STRINGS } from '../utils/musicTheory.js';
 import { SAMPLE_PIECES, transposePieceForInstrument } from '../utils/samplePieces.js';
 import { generateRandomScore, RANDOM_OPTIONS_KEY } from '../utils/randomScoreGenerator.js';
+import { evaluateScanQuality, isOmrScannedPiece } from '../utils/scanQuality.js';
 import { checkNote, CENTS_TOLERANCE } from '../utils/sessionMetrics.js';
 import { useReferencePlayer } from '../utils/useReferencePlayer.js';
 import IntonationGauge from '../components/IntonationGauge.jsx';
@@ -140,6 +141,13 @@ export default function Practice() {
     () => rawPiece?.isGenerated ? rawPiece : transposePieceForInstrument(rawPiece, instrument),
     [rawPiece, instrument],
   );
+  const rawScanQuality = useMemo(
+    () => isOmrScannedPiece(rawPiece)
+      ? evaluateScanQuality(rawPiece, { expectedInstrument: instrument })
+      : null,
+    [instrument, rawPiece],
+  );
+  const scanBlocked = rawScanQuality?.status === 'fail';
 
   const [bpm,            setBpm]            = useState(rawPiece.bpm ?? 100);
   const [isPlaying,      setIsPlaying]      = useState(false);
@@ -344,6 +352,7 @@ export default function Practice() {
   }
 
   async function startSession() {
+    if (scanBlocked) return;
     stopRef();          // reference playback can't run during practice
     await startListening();
     // Clear any previous report so Report.jsx starts fresh (avoids StrictMode stale-read)
@@ -468,13 +477,13 @@ export default function Practice() {
               ? stopRef()
               : startRef(allNotes, bpm)
             }
-            disabled={isPlaying}
+            disabled={isPlaying || scanBlocked}
             title={isPlaying ? 'Stop the session to use reference playback' : ''}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-body text-xs transition-all
               ${refPlaying
                 ? 'bg-accent-amber/20 text-accent-amber border-accent-amber/50'
                 : 'bg-white/5 text-text-muted border-white/10 hover:border-white/20'}
-              ${isPlaying ? 'opacity-30 cursor-not-allowed' : ''}`}
+              ${isPlaying || scanBlocked ? 'opacity-30 cursor-not-allowed' : ''}`}
           >
             {refPlaying
               ? <><Square size={13} fill="currentColor"/> Stop</>
@@ -527,6 +536,43 @@ export default function Practice() {
       {/* ── Sheet music ─────────────────────────────────────── */}
       <div ref={sheetScrollRef} className="flex-1 overflow-auto px-4 md:px-6 py-5">
 
+        {scanBlocked ? (
+          <div className="rounded-2xl border border-feedback-error/30 bg-feedback-error/10 p-6 md:p-8 text-center">
+            <p className="text-feedback-error font-body text-xs uppercase tracking-widest mb-2">
+              Scan Failed Quality Checks
+            </p>
+            <h2 className="font-header text-3xl text-text-primary mb-3">
+              This OMR result is not safe to practice.
+            </h2>
+            <p className="text-text-muted font-body text-sm max-w-2xl mx-auto mb-5">
+              The scanner produced MusicXML that looks dense or mislabeled, so feedback would be wrong.
+              Upload real MusicXML for accuracy, or rescan a cleaner cropped page.
+            </p>
+            {rawScanQuality?.issues?.length > 0 && (
+              <ul className="max-w-2xl mx-auto text-left space-y-2 mb-6">
+                {rawScanQuality.issues.map(issue => (
+                  <li key={issue} className="flex gap-2 text-feedback-error font-body text-xs">
+                    <AlertCircle size={13} className="mt-0.5 flex-shrink-0" /> <span>{issue}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={() => navigate('/library')}
+                className="px-5 py-3 rounded-xl bg-accent-amber text-bg-deep font-body font-semibold"
+              >
+                Back to Library
+              </button>
+              <button
+                onClick={startNewQuest}
+                className="px-5 py-3 rounded-xl border border-white/10 text-text-primary font-body font-semibold hover:border-white/25"
+              >
+                Start Random Quest
+              </button>
+            </div>
+          </div>
+        ) : (
         <SheetErrorBoundary musicXml={rawPiece.musicXmlString ?? null}>
           {/* ── OSMD renderer — generated MusicXML pieces ───── */}
           {rawPiece.musicXmlString ? (
@@ -551,9 +597,10 @@ export default function Practice() {
             )
           )}
         </SheetErrorBoundary>
+        )}
 
         {/* Page dots — only shown for VexFlow (multi-page) pieces */}
-        {!rawPiece.musicXmlString && (
+        {!scanBlocked && !rawPiece.musicXmlString && (
           <div className="flex items-center justify-center gap-2 mt-4">
             {Array.from({ length: totalPages }, (_, i) => (
               <div
@@ -571,7 +618,7 @@ export default function Practice() {
         )}
 
         {/* Note progress bar */}
-        <div className="flex items-center gap-3 mt-3">
+        {!scanBlocked && <div className="flex items-center gap-3 mt-3">
           <span className="text-text-muted font-body text-xs">
             Step {Math.min(currentNoteIdx + 1, allNotes.length)} / {allNotes.length}
           </span>
@@ -581,7 +628,7 @@ export default function Practice() {
               style={{ width: `${allNotes.length ? ((currentNoteIdx + 1) / allNotes.length) * 100 : 0}%` }}
             />
           </div>
-        </div>
+        </div>}
       </div>
 
       {/* ── Live feedback panel ──────────────────────────────── */}
@@ -637,9 +684,13 @@ export default function Practice() {
             {!isPlaying ? (
               <button
                 onClick={startSession}
-                className="flex items-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-6 py-3 rounded-xl hover:shadow-[0_0_24px_var(--color-accent-amber)/50] transition-all"
+                disabled={scanBlocked}
+                className={`flex items-center gap-2 font-body font-semibold px-6 py-3 rounded-xl transition-all
+                  ${scanBlocked
+                    ? 'bg-feedback-error/10 text-feedback-error cursor-not-allowed'
+                    : 'bg-accent-amber text-bg-deep hover:shadow-[0_0_24px_var(--color-accent-amber)/50]'}`}
               >
-                <Play size={16} fill="currentColor"/> Start Quest
+                <Play size={16} fill="currentColor"/> {scanBlocked ? 'Scan Failed' : 'Start Quest'}
               </button>
             ) : (
               <>

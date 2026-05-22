@@ -9,7 +9,7 @@ import { useInstrumentStore } from '../store/instrumentStore.js';
 import { PIECES_LIST } from '../utils/samplePieces.js';
 import { parseMusicXml } from '../utils/musicXmlParser.js';
 import { checkServerHealth, scanSheetMusicImage } from '../utils/omrClient.js';
-import { evaluateScanQuality } from '../utils/scanQuality.js';
+import { evaluateScanQuality, isOmrScannedPiece } from '../utils/scanQuality.js';
 import OsmdViewer from '../components/OsmdViewer.jsx';
 
 const INSTRUMENT_FILTERS = ['All', 'Violin', 'Viola', 'Cello', 'Double Bass'];
@@ -102,6 +102,16 @@ async function readMusicXmlFromFile(file) {
   return xmlFile.async('text');
 }
 
+function addRuntimeQuality(piece, instrument) {
+  if (!isOmrScannedPiece(piece)) return piece;
+  const scanQuality = evaluateScanQuality(piece, { expectedInstrument: instrument });
+  return {
+    ...piece,
+    scanQuality,
+    scanBlocked: scanQuality.status === 'fail',
+  };
+}
+
 export default function Library() {
   const navigate = useNavigate();
   const { instrument } = useInstrumentStore();
@@ -117,7 +127,11 @@ export default function Library() {
   const [reviewEdits, setReviewEdits] = useState({ title: '', composer: '', clef: 'treble', bpm: 80 });
   const [uploadedSongs, setUploadedSongs] = useState(loadSavedUploads);
 
-  const allSongs = useMemo(() => [...uploadedSongs, ...PIECES_LIST], [uploadedSongs]);
+  const checkedUploads = useMemo(
+    () => uploadedSongs.map(piece => addRuntimeQuality(piece, instrument)),
+    [instrument, uploadedSongs],
+  );
+  const allSongs = useMemo(() => [...checkedUploads, ...PIECES_LIST], [checkedUploads]);
   const filteredSongs = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return allSongs.filter(piece => {
@@ -149,6 +163,11 @@ export default function Library() {
   }
 
   function practicePiece(piece) {
+    if (piece.scanBlocked) {
+      setUploadState('error');
+      setUploadMessage('That scan failed quality checks, so Practice is blocked. Use MusicXML or rescan with a cleaner/cropped page.');
+      return;
+    }
     sessionStorage.setItem('selectedPiece', piece.id);
     navigate('/practice', { state: { pieceId: piece.id } });
   }
@@ -546,14 +565,16 @@ export default function Library() {
             <div
               key={piece.id}
               className={`group bg-bg-panel rounded-xl border p-5 flex flex-col gap-3 hover:border-accent-amber/30 transition-all
-                ${piece.isUploaded ? 'border-accent-amber/20 bg-accent-amber/[0.03]' : 'border-white/5'}`}
+                ${piece.scanBlocked
+                  ? 'border-feedback-error/30 bg-feedback-error/[0.03]'
+                  : piece.isUploaded ? 'border-accent-amber/20 bg-accent-amber/[0.03]' : 'border-white/5'}`}
             >
               <div className="flex items-start gap-3">
                 <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5
-                  ${piece.isUploaded ? 'bg-accent-amber/10' : 'bg-white/5'}`}
+                  ${piece.scanBlocked ? 'bg-feedback-error/10' : piece.isUploaded ? 'bg-accent-amber/10' : 'bg-white/5'}`}
                 >
                   {piece.isUploaded
-                    ? <FileMusic size={16} className="text-accent-amber" />
+                    ? <FileMusic size={16} className={piece.scanBlocked ? 'text-feedback-error' : 'text-accent-amber'} />
                     : <Music2 size={16} className="text-accent-amber" />}
                 </div>
                 <div className="min-w-0">
@@ -564,8 +585,14 @@ export default function Library() {
 
               <div className="flex items-center gap-2 flex-wrap">
                 {piece.isUploaded && (
-                  <span className="flex items-center gap-1 text-[10px] font-body uppercase tracking-wider px-2 py-0.5 rounded-full border border-accent-amber/40 text-accent-amber bg-accent-amber/10">
-                    {piece.scannedBy && piece.scannedBy !== 'direct-import'
+                  <span className={`flex items-center gap-1 text-[10px] font-body uppercase tracking-wider px-2 py-0.5 rounded-full border
+                    ${piece.scanBlocked
+                      ? 'border-feedback-error/40 text-feedback-error bg-feedback-error/10'
+                      : 'border-accent-amber/40 text-accent-amber bg-accent-amber/10'}`}
+                  >
+                    {piece.scanBlocked
+                      ? <><AlertCircle size={8} /> Needs rescan</>
+                      : piece.scannedBy && piece.scannedBy !== 'direct-import'
                       ? <><ScanLine size={8} /> {piece.scannedBy}</>
                       : <><FileMusic size={8} /> MusicXML</>}
                   </span>
@@ -595,11 +622,21 @@ export default function Library() {
                 </p>
               )}
 
+              {piece.scanBlocked && (
+                <p className="text-feedback-error font-body text-[11px] leading-snug">
+                  Scan blocked: {piece.scanQuality?.issues?.[0] ?? 'OMR output was not reliable enough to practice.'}
+                </p>
+              )}
+
               <button
                 onClick={() => practicePiece(piece)}
-                className="mt-auto flex items-center justify-between w-full px-4 py-2.5 rounded-lg text-sm font-body font-medium transition-all bg-accent-amber/10 text-accent-amber hover:bg-accent-amber hover:text-bg-deep group-hover:shadow-[0_0_14px_rgba(201,162,39,0.3)]"
+                disabled={piece.scanBlocked}
+                className={`mt-auto flex items-center justify-between w-full px-4 py-2.5 rounded-lg text-sm font-body font-medium transition-all
+                  ${piece.scanBlocked
+                    ? 'bg-feedback-error/10 text-feedback-error cursor-not-allowed'
+                    : 'bg-accent-amber/10 text-accent-amber hover:bg-accent-amber hover:text-bg-deep group-hover:shadow-[0_0_14px_rgba(201,162,39,0.3)]'}`}
               >
-                <span>Practice Now</span>
+                <span>{piece.scanBlocked ? 'Scan Failed' : 'Practice Now'}</span>
                 <ChevronRight size={14} />
               </button>
             </div>
