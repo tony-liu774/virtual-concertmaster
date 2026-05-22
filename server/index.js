@@ -17,12 +17,15 @@
  * ──────────────────────────────────────────────────────────────────
  */
 
-import 'dotenv/config';
 import express                             from 'express';
 import fs                                  from 'fs';
 import path                                from 'path';
 import os                                  from 'os';
+import dotenv                              from 'dotenv';
 import { processOMR, getAvailableEngines } from './omrProcessor.js';
+
+dotenv.config({ quiet: true });
+dotenv.config({ path: path.resolve(process.cwd(), 'server/.env'), override: true, quiet: true });
 
 const PORT = process.env.API_PORT ?? 3001;
 const app  = express();
@@ -34,9 +37,9 @@ app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (_req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.options('*', (_req, res) => res.sendStatus(204));
 
 // ── GET /api/health ───────────────────────────────────────────────
 app.get('/api/health', (_req, res) => {
@@ -53,7 +56,7 @@ app.get('/api/health', (_req, res) => {
 //    filename   {string}  Original filename (optional, used for logging)
 //
 //  Response (JSON):
-//    { success: true,  musicXmlString: string, engine: string }
+//    { success: true,  musicXmlString: string, engine: string, warning?: string }
 //    { success: false, error: string }
 
 app.post('/api/omr-scan', async (req, res) => {
@@ -104,6 +107,8 @@ app.post('/api/omr-scan', async (req, res) => {
     success:        true,
     musicXmlString: result.musicXmlString,
     engine:         result.engine,
+    warning:        result.warning || undefined,
+    inspection:     result.inspection,
   });
 });
 

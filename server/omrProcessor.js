@@ -24,6 +24,7 @@ import { promisify }      from 'util';
 import fs                 from 'fs';
 import path               from 'path';
 import os                 from 'os';
+import JSZip              from 'jszip';
 
 const execAsync = promisify(exec);
 
@@ -49,22 +50,101 @@ function isCommandAvailable(cmd) {
 // Install:  pip install oemer
 // Docs:     https://github.com/BreezeWhite/oemer
 
+function mxlRootPath(containerXml) {
+  const match = containerXml.match(/<rootfile\b[^>]*\bfull-path=["']([^"']+)["']/i);
+  return match?.[1]?.replace(/^\/+/, '') ?? '';
+}
+
+async function readMxlMusicXml(mxlPath) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(mxlPath));
+  const container = zip.file('META-INF/container.xml');
+  const rootPath = container ? mxlRootPath(await container.async('text')) : '';
+
+  const xmlFile = (rootPath && zip.file(rootPath)) ||
+    Object.values(zip.files).find(entry =>
+      !entry.dir &&
+      /\.(musicxml|xml)$/i.test(entry.name) &&
+      !/META-INF\/container\.xml$/i.test(entry.name),
+    );
+
+  if (!xmlFile) {
+    throw new Error(`Compressed MusicXML file did not contain a readable score: ${mxlPath}`);
+  }
+
+  return xmlFile.async('text');
+}
+
+function inspectMusicXml(xml) {
+  const measures = Array.from(xml.matchAll(/<measure\b[\s\S]*?<\/measure>/g), match => match[0]);
+  let playableNotes = 0;
+  let maxNotesInMeasure = 0;
+
+  for (const measure of measures) {
+    const notes = Array.from(measure.matchAll(/<note\b[\s\S]*?<\/note>/g), match => match[0]);
+    const playable = notes.filter(note =>
+      !/<rest\b/.test(note) &&
+      !/<chord\b/.test(note) &&
+      !/<grace\b/.test(note),
+    ).length;
+    playableNotes += playable;
+    maxNotesInMeasure = Math.max(maxNotesInMeasure, playable);
+  }
+
+  const averageNotesPerMeasure = measures.length ? playableNotes / measures.length : 0;
+  const reasons = [];
+
+  if (measures.length === 0) reasons.push('no measures detected');
+  if (playableNotes === 0) reasons.push('no playable notes detected');
+  if (averageNotesPerMeasure > 18) reasons.push(`too dense (${averageNotesPerMeasure.toFixed(1)} notes/measure)`);
+  if (maxNotesInMeasure > 32) reasons.push(`one measure has ${maxNotesInMeasure} notes`);
+
+  return {
+    suspicious: reasons.length > 0,
+    reason: reasons.join('; '),
+    measures: measures.length,
+    playableNotes,
+    maxNotesInMeasure,
+    averageNotesPerMeasure: Number(averageNotesPerMeasure.toFixed(1)),
+  };
+}
+
+function buildCandidate(engine, xml) {
+  const inspection = inspectMusicXml(xml);
+  return {
+    success: true,
+    musicXmlString: xml,
+    engine,
+    warning: inspection.suspicious
+      ? `${engine} produced suspicious MusicXML: ${inspection.reason}`
+      : '',
+    inspection,
+  };
+}
+
 async function runOemer(imagePath) {
-  const cmd    = process.env.OEMER_CLI || 'oemer';
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_oemer_'));
+  const cmd       = process.env.OEMER_CLI || 'oemer';
+  const extraArgs = process.env.OEMER_ARGS || '';
+  const outDir    = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_oemer_'));
 
   try {
-    await execAsync(`"${cmd}" "${imagePath}" --output-dir "${outDir}"`, {
-      timeout: 180_000,   // 3 min — first run downloads model weights
+    await execAsync(`"${cmd}" "${imagePath}" --output-path "${outDir}" ${extraArgs}`.trim(), {
+      timeout: 600_000,   // Oemer can take several minutes on CPU/CoreML.
+      maxBuffer: 50 * 1024 * 1024,
     });
 
     const base    = path.basename(imagePath, path.extname(imagePath));
     const xmlPath = path.join(outDir, base + '.musicxml');
+    const altPath = path.join(outDir, base + '.xml');
 
-    if (!fs.existsSync(xmlPath)) {
-      throw new Error(`Oemer did not produce ${xmlPath}. stderr may have details.`);
+    if (fs.existsSync(xmlPath)) {
+      return fs.readFileSync(xmlPath, 'utf-8');
     }
-    return fs.readFileSync(xmlPath, 'utf-8');
+    if (fs.existsSync(altPath)) {
+      return fs.readFileSync(altPath, 'utf-8');
+    }
+
+    const produced = fs.readdirSync(outDir).join(', ') || 'nothing';
+    throw new Error(`Oemer did not produce MusicXML. Expected ${xmlPath} or ${altPath}; got ${produced}.`);
   } finally {
     fs.rmSync(outDir, { recursive: true, force: true });
   }
@@ -82,7 +162,10 @@ async function runAudiveris(imagePath) {
   try {
     await execAsync(
       `"${cmd}" -batch -export -output "${outDir}" "${imagePath}"`,
-      { timeout: 300_000 },   // 5 min — JVM startup + heavy processing
+      {
+        timeout: 300_000,   // 5 min — JVM startup + heavy processing
+        maxBuffer: 50 * 1024 * 1024,
+      },
     );
 
     // Audiveris creates outDir/<bookname>/<bookname>.xml  (or .mxl)
@@ -93,11 +176,7 @@ async function runAudiveris(imagePath) {
       return fs.readFileSync(xmlPath, 'utf-8');
     }
     if (fs.existsSync(mxlPath)) {
-      throw new Error(
-        'Audiveris produced a compressed .mxl file. ' +
-        'Add  -option org.audiveris.omr.sheet.BookManager.useCompression=false  to your Audiveris command, ' +
-        'or set AUDIVERIS_CLI to a wrapper script that includes this flag.',
-      );
+      return readMxlMusicXml(mxlPath);
     }
     throw new Error(`Audiveris output not found. Checked: ${xmlPath}`);
   } finally {
@@ -173,8 +252,19 @@ export function getAvailableEngines() {
  */
 export async function processOMR({ imagePath, base64, mediaType }) {
   const errors = [];
+  let suspiciousCandidate = null;
   const oemerCmd     = process.env.OEMER_CLI     || 'oemer';
   const audiverisCmd = process.env.AUDIVERIS_CLI || 'audiveris';
+
+  function acceptOrFallback(engine, xml) {
+    const candidate = buildCandidate(engine, xml);
+    if (!candidate.inspection.suspicious) return candidate;
+
+    console.warn(`[OMR] ${candidate.warning}; trying fallback if available.`);
+    errors.push(`${engine}: ${candidate.inspection.reason}`);
+    suspiciousCandidate ??= candidate;
+    return null;
+  }
 
   // ── 1. Oemer ───────────────────────────────────────────────────
   if (isCommandAvailable(oemerCmd)) {
@@ -182,7 +272,8 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       console.log('[OMR] Trying Oemer…');
       const xml = await runOemer(imagePath);
       console.log('[OMR] Oemer succeeded.');
-      return { success: true, musicXmlString: xml, engine: 'oemer' };
+      const candidate = acceptOrFallback('oemer', xml);
+      if (candidate) return candidate;
     } catch (err) {
       console.warn('[OMR] Oemer failed:', err.message);
       errors.push(`Oemer: ${err.message}`);
@@ -197,7 +288,8 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       console.log('[OMR] Trying Audiveris…');
       const xml = await runAudiveris(imagePath);
       console.log('[OMR] Audiveris succeeded.');
-      return { success: true, musicXmlString: xml, engine: 'audiveris' };
+      const candidate = acceptOrFallback('audiveris', xml);
+      if (candidate) return candidate;
     } catch (err) {
       console.warn('[OMR] Audiveris failed:', err.message);
       errors.push(`Audiveris: ${err.message}`);
@@ -212,12 +304,15 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       console.log('[OMR] Trying remote endpoint:', process.env.OMR_ENDPOINT);
       const xml = await callRemoteEndpoint(base64, mediaType);
       console.log('[OMR] Remote endpoint succeeded.');
-      return { success: true, musicXmlString: xml, engine: 'remote' };
+      const candidate = acceptOrFallback('remote', xml);
+      if (candidate) return candidate;
     } catch (err) {
       console.warn('[OMR] Remote endpoint failed:', err.message);
       errors.push(`Remote (${process.env.OMR_ENDPOINT}): ${err.message}`);
     }
   }
+
+  if (suspiciousCandidate) return suspiciousCandidate;
 
   return { success: false, error: buildInstallError(errors) };
 }

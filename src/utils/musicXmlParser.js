@@ -15,6 +15,8 @@
  *   - Double-dots produce the same vexDur as single-dot (rare in practice).
  */
 
+import { repairLikelyOemerRhythm } from './rhythmRepair.js';
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 const FIFTHS_TO_KEY = {
@@ -147,12 +149,13 @@ export function parseMusicXml(xmlString, fallbackBpm = 80) {
         // ── 4b. Note elements ───────────────────────────────────
         const noteEls = Array.from(measureEl.querySelectorAll(':scope > note'));
         const bar = [];
+        let skippedNonPitch = false;
 
         for (const noteEl of noteEls) {
           try {
-            if (noteEl.querySelector('rest'))   continue;  // rest
-            if (noteEl.querySelector('chord'))  continue;  // chord continuation
-            if (noteEl.querySelector('grace'))  continue;  // grace note
+            if (noteEl.querySelector('rest'))  { skippedNonPitch = true; continue; }  // rest
+            if (noteEl.querySelector('chord')) { skippedNonPitch = true; continue; }  // chord continuation
+            if (noteEl.querySelector('grace')) { skippedNonPitch = true; continue; }  // grace note
 
             const stepEl   = noteEl.querySelector('pitch > step');
             const octaveEl = noteEl.querySelector('pitch > octave');
@@ -180,7 +183,9 @@ export function parseMusicXml(xmlString, fallbackBpm = 80) {
           }
         }
 
-        if (bar.length > 0) measures.push(bar);
+        if (bar.length > 0) {
+          measures.push(repairLikelyOemerRhythm(bar, timeSignature, skippedNonPitch));
+        }
       } catch (measureErr) {
         // Malformed measure — skip, keep going
         console.warn('[musicXmlParser] Skipping malformed <measure>:', measureErr.message);

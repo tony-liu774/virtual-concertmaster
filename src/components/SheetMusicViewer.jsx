@@ -427,7 +427,7 @@ export default function SheetMusicViewer({
   }
 
   return (
-    <div className={`rounded-xl overflow-auto ${className}`} style={{ background: 'transparent' }}>
+    <div className={`vf-dark rounded-xl overflow-auto ${className}`} style={{ background: 'transparent' }}>
       <style>{`
         /* ── Bouncing ball keyframes ───────────────────────── */
         @keyframes vc-ball-hop {

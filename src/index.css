@@ -68,19 +68,19 @@ canvas {
 
 /* ── VexFlow dark theme override ────────────────────────── */
 /* All VexFlow SVG elements render in ivory on dark bg */
-.vf-stavenote path,
-.vf-stem,
-.vf-beam path,
-.vf-stave line,
-.vf-stave path,
-.vf-clef path,
-.vf-timesig path,
-.vf-accidental path,
-.vf-notehead path {
+.vf-dark .vf-stavenote path,
+.vf-dark .vf-stem,
+.vf-dark .vf-beam path,
+.vf-dark .vf-stave line,
+.vf-dark .vf-stave path,
+.vf-dark .vf-clef path,
+.vf-dark .vf-timesig path,
+.vf-dark .vf-accidental path,
+.vf-dark .vf-notehead path {
   fill: #c8cdd8;
   stroke: #c8cdd8;
 }
-.vf-stave line {
+.vf-dark .vf-stave line {
   stroke: #2d3a52;
 }
 

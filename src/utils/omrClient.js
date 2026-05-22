@@ -56,7 +56,7 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ base64, mediaType, filename }),
-      signal:  AbortSignal.timeout(300_000),   // 5 min — OMR can be slow
+      signal:  AbortSignal.timeout(660_000),   // Oemer can take 5-10 min locally.
     });
   } catch (err) {
     const isOffline = err.name === 'TypeError' || err.name === 'AbortError';
@@ -80,7 +80,7 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
     return { success: false, error: data.error ?? 'OMR processing failed.' };
   }
 
-  const { musicXmlString, engine } = data;
+  const { musicXmlString, engine, warning, inspection } = data;
 
   if (!musicXmlString || typeof musicXmlString !== 'string' || musicXmlString.length < 100) {
     return { success: false, error: 'Server returned an empty MusicXML document.' };
@@ -108,6 +108,8 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
       isUploaded:     true,
       uploadedAt:     new Date().toISOString(),
       scannedBy:      engine,             // 'oemer' | 'audiveris' | 'remote'
+      engineWarning:  warning ?? '',
+      engineInspection: inspection ?? null,
       musicXmlString,                     // OSMD renders this directly
       measures:       parsed.measures,    // pitch-detection tick loop
     },
