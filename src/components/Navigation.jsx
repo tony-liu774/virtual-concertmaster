@@ -85,6 +85,9 @@ export default function Navigation() {
               <NavLink
                 key={to}
                 to={to}
+                onClick={() => {
+                  if (to === '/practice') sessionStorage.removeItem('selectedPiece');
+                }}
                 title={label}
                 className={`
                   flex flex-col items-center justify-center w-12 h-12 rounded-xl transition-all duration-150
@@ -115,6 +118,9 @@ export default function Navigation() {
               <NavLink
                 key={to}
                 to={to}
+                onClick={() => {
+                  if (to === '/practice') sessionStorage.removeItem('selectedPiece');
+                }}
                 className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg transition-all ${active ? 'text-accent-amber' : 'text-text-muted'}`}
               >
                 <Icon size={18} strokeWidth={active ? 2.5 : 1.8} />

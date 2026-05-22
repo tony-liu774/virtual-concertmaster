@@ -85,6 +85,13 @@ class SheetErrorBoundary extends Component {
 }
 
 // ── Piece resolution helpers ────────────────────────────────────
+const UPLOADS_LS_KEY = 'virtual_concertmaster_uploads';
+
+function loadUploadedPieces() {
+  try { return JSON.parse(localStorage.getItem(UPLOADS_LS_KEY) || '[]'); }
+  catch { return []; }
+}
+
 function loadRandomOptions(locationState) {
   let saved = {};
   try { saved = JSON.parse(sessionStorage.getItem(RANDOM_OPTIONS_KEY) || '{}'); }
@@ -99,10 +106,13 @@ function makeRandomPiece(instrument, locationState) {
 /**
  * Resolve any piece ID to a full piece object.
  *   1. Built-in catalogue (SAMPLE_PIECES)
- *   2. Fresh generated sight-reading quest
+ *   2. User-uploaded / OMR-scanned pieces in localStorage
  */
 function resolvePiece(id) {
+  if (!id) return null;
   if (SAMPLE_PIECES[id]) return SAMPLE_PIECES[id];
+  const found = loadUploadedPieces().find(p => p.id === id);
+  if (found) return found;
   return null;
 }
 
@@ -367,7 +377,7 @@ export default function Practice() {
         pieceId:    rawPiece.id,       // always the canonical (untransposed) id
         pieceTitle: rawPiece.title,
         instrument,                    // save so Report can re-transpose correctly
-        pieceSnapshot: rawPiece.isGenerated ? rawPiece : null,
+        pieceSnapshot: rawPiece.isGenerated || rawPiece.isUploaded ? rawPiece : null,
         log,
         totalNotes: playableTotal,
         elapsed:    elapsedSecsRef.current,
