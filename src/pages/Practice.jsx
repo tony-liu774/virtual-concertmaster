@@ -6,6 +6,7 @@ import { useSynthTone } from '../utils/synthTone.js';
 import { useInstrumentStore } from '../store/instrumentStore.js';
 import { intonationState, INSTRUMENT_RANGES, midiToFreq, OPEN_STRINGS } from '../utils/musicTheory.js';
 import { SAMPLE_PIECES, transposePieceForInstrument } from '../utils/samplePieces.js';
+import { generateRandomScore, RANDOM_OPTIONS_KEY } from '../utils/randomScoreGenerator.js';
 import { checkNote, CENTS_TOLERANCE } from '../utils/sessionMetrics.js';
 import { useReferencePlayer } from '../utils/useReferencePlayer.js';
 import IntonationGauge from '../components/IntonationGauge.jsx';
@@ -17,8 +18,12 @@ const MEASURES_PER_PAGE = 8;
 const LINE_HEIGHT_PX    = 130;  // matches SheetMusicViewer LINE_HEIGHT
 const MEASURES_PER_LINE = 4;
 
-/** Safely flatten all measures → flat note array.  Never throws. */
+/** Safely flatten a piece into its timed practice stream. Never throws. */
 function flattenNotes(piece) {
+  if (piece?.events?.length) {
+    try { return piece.events.flatMap(m => (Array.isArray(m) ? m : [])); }
+    catch { return []; }
+  }
   if (!piece?.measures?.length) return [];
   try {
     return piece.measures.flatMap(m => (Array.isArray(m) ? m : []));
@@ -29,18 +34,19 @@ function flattenNotes(piece) {
 
 /** Return the measure index that contains the given global note index. */
 function measureIdxFor(piece, noteIdx) {
-  if (!piece?.measures?.length) return 0;
+  const measureSource = piece?.events?.length ? piece.events : piece?.measures;
+  if (!measureSource?.length) return 0;
   let count = 0;
-  for (let m = 0; m < piece.measures.length; m++) {
-    count += (piece.measures[m]?.length ?? 0);
+  for (let m = 0; m < measureSource.length; m++) {
+    count += (measureSource[m]?.length ?? 0);
     if (noteIdx < count) return m;
   }
-  return Math.max(0, piece.measures.length - 1);
+  return Math.max(0, measureSource.length - 1);
 }
 
 // ── Sheet-music error boundary ──────────────────────────────────
 // Catches render-time crashes inside SheetMusicViewer or OsmdViewer so
-// a bad scan never blanks the whole Practice page.
+// a malformed generated score never blanks the whole Practice page.
 class SheetErrorBoundary extends Component {
   constructor(props) {
     super(props);
@@ -58,8 +64,8 @@ class SheetErrorBoundary extends Component {
         <div className="rounded-2xl border border-white/10 bg-bg-panel/60 p-6 text-center">
           <p className="text-accent-amber font-body text-sm mb-1">Score display error</p>
           <p className="text-text-muted font-body text-xs leading-relaxed">
-            Rendering score… If performance tracking fails to load, please re-scan
-            or verify layout data.
+            Rendering score… If performance tracking fails to load, start a new quest
+            or refresh the generated score.
           </p>
           <p className="text-white/20 font-mono text-[10px] mt-3 break-all">
             {this.state.message}
@@ -79,36 +85,34 @@ class SheetErrorBoundary extends Component {
 }
 
 // ── Piece resolution helpers ────────────────────────────────────
-// Uploaded / scanned pieces live in localStorage, not in SAMPLE_PIECES.
-// Both mount-time resolution and the navigation-state effect must check
-// localStorage so that scanned pieces are never silently swapped for Twinkle.
+function loadRandomOptions(locationState) {
+  let saved = {};
+  try { saved = JSON.parse(sessionStorage.getItem(RANDOM_OPTIONS_KEY) || '{}'); }
+  catch { saved = {}; }
+  return { ...saved, ...(locationState?.randomOptions ?? {}) };
+}
 
-const UPLOADS_LS_KEY = 'virtual_concertmaster_uploads';
-
-function loadUploadedPieces() {
-  try { return JSON.parse(localStorage.getItem(UPLOADS_LS_KEY) || '[]'); }
-  catch { return []; }
+function makeRandomPiece(instrument, locationState) {
+  return generateRandomScore({ instrument, ...loadRandomOptions(locationState) });
 }
 
 /**
  * Resolve any piece ID to a full piece object.
  *   1. Built-in catalogue (SAMPLE_PIECES)
- *   2. User-uploaded / OMR-scanned pieces in localStorage
- *   3. Hard fallback: Twinkle (should never be reached with valid IDs)
+ *   2. Fresh generated sight-reading quest
  */
 function resolvePiece(id) {
-  if (!id) return SAMPLE_PIECES.twinkle;
   if (SAMPLE_PIECES[id]) return SAMPLE_PIECES[id];
-  const found = loadUploadedPieces().find(p => p.id === id);
-  if (found) return found;
-  console.warn(`[Practice] Piece "${id}" not found in catalogue or uploads — falling back to Twinkle.`);
-  return SAMPLE_PIECES.twinkle;
+  return null;
 }
 
-/** Resolve piece from navigation state → sessionStorage → default */
-function resolveRawPiece(locationState) {
-  const id = locationState?.pieceId ?? sessionStorage.getItem('selectedPiece') ?? 'twinkle';
-  return resolvePiece(id);
+/** Resolve piece from navigation state, otherwise create a new quest. */
+function resolveRawPiece(locationState, instrument) {
+  const navPiece = resolvePiece(locationState?.pieceId);
+  if (navPiece) return navPiece;
+  const storedPiece = resolvePiece(sessionStorage.getItem('selectedPiece'));
+  if (storedPiece) return storedPiece;
+  return makeRandomPiece(instrument, locationState);
 }
 
 export default function Practice() {
@@ -118,12 +122,12 @@ export default function Practice() {
   const range      = INSTRUMENT_RANGES[instrument] ?? INSTRUMENT_RANGES.violin;
 
   // ── Base (untransposed) piece ───────────────────────────────
-  const [rawPiece, setRawPiece] = useState(() => resolveRawPiece(location.state));
+  const [rawPiece, setRawPiece] = useState(() => resolveRawPiece(location.state, instrument));
 
   // ── Transposed piece for the active instrument ──────────────
   //    All display AND pitch-detection uses this version.
   const piece = useMemo(
-    () => transposePieceForInstrument(rawPiece, instrument),
+    () => rawPiece?.isGenerated ? rawPiece : transposePieceForInstrument(rawPiece, instrument),
     [rawPiece, instrument],
   );
 
@@ -142,7 +146,7 @@ export default function Practice() {
   const elapsedSecsRef   = useRef(0);
   const sessionLogRef    = useRef([]);
   const sheetScrollRef   = useRef(null);
-  const osmdRef          = useRef(null);   // OSMD cursor API for scanned pieces
+  const osmdRef          = useRef(null);   // OSMD cursor API for generated pieces
 
   const { isListening, currentNote, startListening, stopListening, error } =
     useAudioAnalyzer({ minFreq: range.min, maxFreq: range.max });
@@ -154,33 +158,43 @@ export default function Practice() {
   useEffect(() => { currentNoteRef.current = currentNote;  }, [currentNote]);
   useEffect(() => { sessionLogRef.current  = sessionLog;   }, [sessionLog]);
 
-  // ── React when Library navigates here with a new piece ──────
-  //    location.state?.pieceId changes every time the user clicks
-  //    "Practice Now", even if the URL stays /practice.
-  const navPieceId = location.state?.pieceId;
-  useEffect(() => {
-    if (!navPieceId) return;
-    const next = resolvePiece(navPieceId);
-    if (next.id === rawPiece.id) return; // same piece — no-op
-
-    // Tear down any running session cleanly
+  const resetPracticeState = useCallback((nextPiece) => {
     clearTimeout(tickRef.current);
     clearInterval(elapsedRef.current);
     stopListening();
     stopDrone();
+    stopRef();
     setIsPlaying(false);
-
-    // Reset all session state
-    setRawPiece(next);
-    setBpm(next.bpm ?? 100);
+    setRawPiece(nextPiece);
+    setBpm(nextPiece.bpm ?? 100);
     setCurrentNoteIdx(0);
-    noteIdxRef.current    = 0;
+    noteIdxRef.current     = 0;
     setPage(0);
     setSessionLog([]);
-    sessionLogRef.current = [];
+    sessionLogRef.current  = [];
     setElapsed(0);
     elapsedSecsRef.current = 0;
-  }, [navPieceId]); // eslint-disable-line
+    osmdRef.current?.cursorHide();
+  }, [stopDrone, stopListening, stopRef]);
+
+  const startNewQuest = useCallback(() => {
+    resetPracticeState(makeRandomPiece(instrument, location.state));
+  }, [instrument, location.state, resetPracticeState]);
+
+  // ── React when Library navigates here with a new piece ──────
+  //    location.state?.pieceId changes every time the user clicks
+  //    "Practice Now", even if the URL stays /practice.
+  const navPieceId = location.state?.pieceId;
+  const randomSeed = location.state?.randomSeed;
+  useEffect(() => {
+    if (!navPieceId && !randomSeed) return;
+    const next = randomSeed
+      ? makeRandomPiece(instrument, location.state)
+      : resolvePiece(navPieceId);
+    if (!next) return;
+    if (next.id === rawPiece.id) return; // same piece — no-op
+    resetPracticeState(next);
+  }, [navPieceId, randomSeed]); // eslint-disable-line
 
   // ── Also reset when instrument changes mid-session ──────────
   //    (Pitch detection targets change, so a running session is invalid)
@@ -188,6 +202,10 @@ export default function Practice() {
   useEffect(() => {
     if (prevInstrumentRef.current === instrument) return;
     prevInstrumentRef.current = instrument;
+    if (rawPiece?.isGenerated) {
+      resetPracticeState(makeRandomPiece(instrument, location.state));
+      return;
+    }
     if (!isPlaying) return;
     clearTimeout(tickRef.current);
     clearInterval(elapsedRef.current);
@@ -203,13 +221,15 @@ export default function Practice() {
     elapsedSecsRef.current = 0;
   }, [instrument]); // eslint-disable-line
 
-  const allNotes   = flattenNotes(piece);
-  const targetNote = allNotes[currentNoteIdx] ?? null;
-  const cents = currentNote && targetNote
+  const allNotes       = flattenNotes(piece);
+  const playableTotal  = allNotes.filter(note => !note?.isRest).length;
+  const targetNote     = allNotes[currentNoteIdx] ?? null;
+  const targetIsRest   = !!targetNote?.isRest;
+  const cents = currentNote && targetNote && !targetIsRest
     ? 12 * Math.log2(currentNote.frequency / targetNote.freq) * 100
     : 0;
   const state    = intonationState(cents);
-  const showGauge = isListening && Math.abs(cents) > 10 && currentNote !== null;
+  const showGauge = !targetIsRest && isListening && Math.abs(cents) > 10 && currentNote !== null;
 
   // ── Page slice (must be declared before pageNoteErrors useMemo) ──
   const pageStart = page * MEASURES_PER_PAGE;
@@ -237,7 +257,7 @@ export default function Practice() {
   }, [errorNoteSet, piece, pageStart]);
 
   // Live pitch status → flash cursor crimson if player is off-pitch right now
-  const pitchStatus = isListening && isPlaying && targetNote && currentNote
+  const pitchStatus = isListening && isPlaying && targetNote && !targetIsRest && currentNote
     ? checkNote(currentNote.frequency, targetNote.freq)
     : 'NONE';
   const pitchFlash = pitchStatus === 'RED_SHARP' || pitchStatus === 'RED_FLAT';
@@ -273,7 +293,7 @@ export default function Practice() {
 
   function logNote() {
     const target = allNotes[noteIdxRef.current];
-    if (!target) return;
+    if (!target || target.isRest) return;
     const detected = currentNoteRef.current;
     let noteCents = null, inTune = false;
     if (detected && target.freq > 0) {
@@ -307,7 +327,7 @@ export default function Practice() {
 
   function scheduleNextNote() {
     const note = allNotes[noteIdxRef.current];
-    if (!note) return;                                    // empty scan — no-op
+    if (!note) return;                                    // empty score — no-op
     const beats = durationBeats[note?.duration] ?? 1;    // safe property access
     logNote();
     tickRef.current = setTimeout(() => { advanceNote(); scheduleNextNote(); }, beats * beatMs());
@@ -347,8 +367,9 @@ export default function Practice() {
         pieceId:    rawPiece.id,       // always the canonical (untransposed) id
         pieceTitle: rawPiece.title,
         instrument,                    // save so Report can re-transpose correctly
+        pieceSnapshot: rawPiece.isGenerated ? rawPiece : null,
         log,
-        totalNotes: allNotes.length,
+        totalNotes: playableTotal,
         elapsed:    elapsedSecsRef.current,
       }));
       navigate('/report');
@@ -414,12 +435,23 @@ export default function Practice() {
       <div className="flex items-center justify-between px-5 py-3 border-b border-white/5 bg-bg-panel flex-shrink-0">
         <div>
           <p className="text-text-muted font-body text-xs uppercase tracking-widest">
-            Practice · {instrLabel} · {clefLabel} Clef
+            Sight-Read · {instrLabel} · {clefLabel} Clef
           </p>
           <h1 className="font-header text-lg text-text-primary leading-tight">{piece?.title ?? 'Practice'}</h1>
           <p className="text-text-muted font-body text-[10px]">{piece?.composer ?? ''}</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={startNewQuest}
+            disabled={isPlaying}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border font-body text-xs transition-all
+              ${isPlaying
+                ? 'bg-white/5 text-text-muted/40 border-white/10 cursor-not-allowed'
+                : 'bg-accent-amber/15 text-accent-amber border-accent-amber/40 hover:bg-accent-amber/25'}`}
+          >
+            <SkipForward size={13}/> New Quest
+          </button>
+
           {/* Play Reference button — hear the piece before practising */}
           <button
             onClick={() => refPlaying
@@ -486,7 +518,7 @@ export default function Practice() {
       <div ref={sheetScrollRef} className="flex-1 overflow-auto px-4 md:px-6 py-5">
 
         <SheetErrorBoundary musicXml={rawPiece.musicXmlString ?? null}>
-          {/* ── OSMD renderer — scanned pieces with MusicXML ───── */}
+          {/* ── OSMD renderer — generated MusicXML pieces ───── */}
           {rawPiece.musicXmlString ? (
             <OsmdViewer
               ref={osmdRef}
@@ -531,12 +563,12 @@ export default function Practice() {
         {/* Note progress bar */}
         <div className="flex items-center gap-3 mt-3">
           <span className="text-text-muted font-body text-xs">
-            Note {currentNoteIdx + 1} / {allNotes.length}
+            Step {Math.min(currentNoteIdx + 1, allNotes.length)} / {allNotes.length}
           </span>
           <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
             <div
               className="h-full bg-accent-amber rounded-full transition-all"
-              style={{ width: `${((currentNoteIdx + 1) / allNotes.length) * 100}%` }}
+              style={{ width: `${allNotes.length ? ((currentNoteIdx + 1) / allNotes.length) * 100 : 0}%` }}
             />
           </div>
         </div>
@@ -552,7 +584,7 @@ export default function Practice() {
               {targetNote ? targetNote.name : '—'}
             </span>
             <span className="text-text-muted font-body text-[10px]">
-              {targetNote ? `${targetNote.freq.toFixed(1)} Hz` : '—'}
+              {targetNote && !targetIsRest ? `${targetNote.freq.toFixed(1)} Hz` : '—'}
             </span>
           </div>
 
@@ -560,23 +592,29 @@ export default function Practice() {
           <div className="flex flex-col items-center gap-0.5 min-w-20">
             <span className="text-text-muted font-body text-[10px] uppercase tracking-widest">Detected</span>
             <span className={`font-header text-4xl ${isListening && currentNote ? stateColor : 'text-text-muted/30'}`}>
-              {isListening && currentNote ? `${currentNote.name}${currentNote.octave}` : '—'}
+              {!targetIsRest && isListening && currentNote ? `${currentNote.name}${currentNote.octave}` : '—'}
             </span>
             <span className="text-text-muted font-body text-[10px]">
-              {isListening && currentNote ? `${currentNote.frequency.toFixed(1)} Hz` : '—'}
+              {!targetIsRest && isListening && currentNote ? `${currentNote.frequency.toFixed(1)} Hz` : '—'}
             </span>
           </div>
 
           {/* Gauge */}
           <div className="flex-1 flex justify-center">
             <IntonationGauge cents={cents} visible={showGauge} />
-            {!showGauge && isListening && currentNote && (
+            {targetIsRest && (
+              <div className="flex flex-col items-center gap-1 text-text-muted/50">
+                <Square size={18}/>
+                <span className="font-body text-xs">Rest</span>
+              </div>
+            )}
+            {!targetIsRest && !showGauge && isListening && currentNote && (
               <div className="flex flex-col items-center gap-1">
                 <div className="w-3 h-3 rounded-full bg-feedback-success animate-breath shadow-[0_0_12px_var(--color-feedback-success)]"/>
                 <span className="text-feedback-success font-body text-xs">In Tune</span>
               </div>
             )}
-            {!isListening && (
+            {!targetIsRest && !isListening && (
               <div className="flex flex-col items-center gap-1 text-text-muted/30">
                 <MicOff size={24}/>
                 <span className="font-body text-xs">Start to enable mic</span>
@@ -591,7 +629,7 @@ export default function Practice() {
                 onClick={startSession}
                 className="flex items-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-6 py-3 rounded-xl hover:shadow-[0_0_24px_var(--color-accent-amber)/50] transition-all"
               >
-                <Play size={16} fill="currentColor"/> Start
+                <Play size={16} fill="currentColor"/> Start Quest
               </button>
             ) : (
               <>

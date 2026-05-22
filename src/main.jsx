@@ -10,9 +10,7 @@ import Library from './pages/Library.jsx'
 import Practice from './pages/Practice.jsx'
 import Tuner from './pages/Tuner.jsx'
 import Report from './pages/Report.jsx'
-import PitchQuest from './pages/PitchQuest.jsx'
 import Sandbox from './pages/Sandbox.jsx'
-import OmrFixture from './pages/OmrFixture.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
@@ -25,11 +23,8 @@ createRoot(document.getElementById('root')).render(
             <Route path="/practice" element={<Practice />} />
             <Route path="/tuner"    element={<Tuner />} />
             <Route path="/report"      element={<Report />} />
-            <Route path="/pitch-quest" element={<PitchQuest />} />
+            <Route path="/pitch-quest" element={<Navigate to="/practice" replace />} />
           </Route>
-          {import.meta.env.DEV && (
-            <Route path="/__omr-fixture" element={<OmrFixture />} />
-          )}
           <Route path="/sandbox" element={<Sandbox />} />
           <Route path="*"        element={<Navigate to="/" replace />} />
         </Routes>

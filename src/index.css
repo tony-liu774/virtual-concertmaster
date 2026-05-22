@@ -134,19 +134,3 @@ canvas {
   50%       { transform: scale(1.08); filter: drop-shadow(0 0 12px var(--color-accent-amber)); }
 }
 .level-up-flash { animation: levelFlash 0.6s ease-in-out; }
-
-/* Futuristic scan line overlay for active sessions */
-@keyframes scan {
-  0%   { background-position: 0 0; }
-  100% { background-position: 0 100%; }
-}
-.scan-lines {
-  background-image: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(0,0,0,0.08) 2px,
-    rgba(0,0,0,0.08) 4px
-  );
-  pointer-events: none;
-}

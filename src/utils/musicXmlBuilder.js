@@ -1,10 +1,9 @@
 /**
  * musicXmlBuilder.js — Programmatic MusicXML 3.1 compiler.
  *
- * Takes the flat, structured JSON that GPT-4o returns (see omrClient.js for
- * the exact schema) and compiles it into a valid MusicXML document and an
- * internal pitch-detection note array — entirely in JavaScript code, with
- * zero AI-generated XML tags.
+ * Takes flat, structured score JSON and compiles it into a valid MusicXML
+ * document and an internal pitch-detection note array — entirely in
+ * JavaScript code, with zero hand-authored XML at call sites.
  *
  * This sidesteps every class of hallucination that arises from asking an LLM
  * to write raw XML: truncated documents, wrong clef signs, made-up attributes,
@@ -185,7 +184,7 @@ function noteXml(pitchStr, durationCode) {
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Compile GPT-4o score JSON → complete MusicXML 3.1 document string.
+ * Compile score JSON → complete MusicXML 3.1 document string.
  *
  * @param {object} scoreData  { title, composer, clef, keySignature, timeSignature, allMeasures }
  * @returns {string}  Full MusicXML document, or '' if no valid notes.
@@ -194,6 +193,8 @@ export function buildMusicXml(scoreData) {
   const {
     title         = 'Untitled',
     composer      = 'Unknown',
+    partName      = 'Music',
+    software      = 'Virtual Concertmaster',
     clef          = 'treble',
     keySignature  = 'C',
     timeSignature = '4/4',
@@ -244,10 +245,10 @@ export function buildMusicXml(scoreData) {
     `  <work><work-title>${xmlEsc(title)}</work-title></work>`,
     `  <identification>`,
     `    <creator type="composer">${xmlEsc(composer)}</creator>`,
-    `    <encoding><software>Virtual Concertmaster OMR</software></encoding>`,
+    `    <encoding><software>${xmlEsc(software)}</software></encoding>`,
     `  </identification>`,
     `  <part-list>`,
-    `    <score-part id="P1"><part-name>Music</part-name></score-part>`,
+    `    <score-part id="P1"><part-name>${xmlEsc(partName)}</part-name></score-part>`,
     `  </part-list>`,
     `  <part id="P1">`,
     ...measureLines.map(l => '    ' + l),
@@ -257,7 +258,7 @@ export function buildMusicXml(scoreData) {
 }
 
 /**
- * Convert GPT-4o score JSON → internal measures array for pitch detection.
+ * Convert score JSON → internal measures array for pitch detection.
  * Returns Array<Array<HydratedNote>> — the same shape samplePieces.js uses.
  *
  * Never throws; skips unrecognisable notes silently.
@@ -299,10 +300,10 @@ export function buildInternalMeasures(scoreData) {
 }
 
 /**
- * Parse a flat GPT-4o note-stream string into the two data structures the
+ * Parse a flat note-stream string into the two data structures the
  * rest of the pipeline needs.
  *
- * Input format (produced by the OMR system prompt):
+ * Input format:
  *   "A2/4 D3/4 F#3/4 | G3/4 F#3/4 E3/4 | D3/2 R/4 | ..."
  *
  *   Each token is  [Pitch]/[Duration]  where:

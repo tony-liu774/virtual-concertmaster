@@ -6,6 +6,7 @@ import { useStats } from '../contexts/StatsContext.jsx';
 import { analyzeSession, buildSessionPayload } from '../utils/aiCoach.js';
 import { computeMetrics, nextDemoScenario } from '../utils/sessionMetrics.js';
 import SheetMusicViewer from '../components/SheetMusicViewer.jsx';
+import OsmdViewer from '../components/OsmdViewer.jsx';
 
 // ── Heat map helpers ──────────────────────────────────────────
 // Constants mirror SheetMusicViewer so overlay coords align exactly
@@ -128,10 +129,10 @@ export default function Report() {
   // ── 3. Piece for sheet-music rendering (real sessions only) ─
   const reportInstrument = sessionData?.instrument ?? 'violin';
   const rawPiece  = hasRealData
-    ? (SAMPLE_PIECES[sessionData.pieceId] ?? null)
+    ? (sessionData.pieceSnapshot ?? SAMPLE_PIECES[sessionData.pieceId] ?? null)
     : null;
   const piece     = rawPiece
-    ? transposePieceForInstrument(rawPiece, reportInstrument)
+    ? (rawPiece.isGenerated ? rawPiece : transposePieceForInstrument(rawPiece, reportInstrument))
     : null;
   const totalMeasures = piece?.measures?.length ?? 8;
 
@@ -356,12 +357,21 @@ export default function Report() {
 
       {/* ── Measure Heat Map + Sheet Music ──────────────── */}
       <div className="bg-bg-panel rounded-2xl border border-white/5 p-6 mb-6">
-        <h2 className="font-header text-lg text-text-primary mb-1">Measure Heat Map</h2>
+        <h2 className="font-header text-lg text-text-primary mb-1">
+          {piece?.isGenerated ? 'Quest Score' : 'Measure Heat Map'}
+        </h2>
         <p className="text-text-muted font-body text-xs mb-4">
-          Crimson boxes mark measures flagged by the AI coach · Grey = no audio detected
+          {piece?.isGenerated
+            ? 'Generated sight-reading score used for this run'
+            : 'Crimson boxes mark measures flagged by the AI coach · Grey = no audio detected'}
         </p>
 
-        {piece ? (
+        {piece?.musicXmlString ? (
+          <OsmdViewer
+            musicXml={piece.musicXmlString}
+            className="rounded-xl overflow-hidden"
+          />
+        ) : piece ? (
           <div ref={sheetRef} className="relative">
             <SheetMusicViewer
               piece={{ ...piece, measures: piece.measures.slice(0, 8) }}

@@ -1,14 +1,13 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Music2, Library, Mic2, Gauge, BarChart3, Target, ChevronDown } from 'lucide-react';
+import { Music2, Library, Mic2, Gauge, BarChart3, ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { useInstrumentStore } from '../store/instrumentStore.js';
 
 const NAV_LINKS = [
   { to: '/',           icon: Music2,    label: 'Home'     },
-  { to: '/library',    icon: Library,   label: 'Library'  },
-  { to: '/practice',   icon: Mic2,      label: 'Practice' },
+  { to: '/library',    icon: Library,   label: 'Setup'    },
+  { to: '/practice',   icon: Mic2,      label: 'Quest'    },
   { to: '/tuner',      icon: Gauge,     label: 'Tuner'    },
-  { to: '/pitch-quest',icon: Target,    label: 'Quest'    },
   { to: '/report',     icon: BarChart3, label: 'Report'   },
 ];
 

@@ -41,8 +41,8 @@ function countAccidentals(measure) {
  *   budget = decorPad + max(noteCount×PX_PER_NOTE + accCount×ACCIDENTAL_EXTRA, MIN_INNER_W)
  *          + RIGHT_MARGIN + 4 (barline gap)
  *
- * Accidental detection is the key addition for scanned scores: a D-major
- * symphony passage where every note is C# or F# needs ~60 px/note, not 26.
+ * Accidental detection is the key addition for dense scores: a D-major
+ * passage where every note is C# or F# needs ~60 px/note, not 26.
  */
 function computeStaveWidth(measure, col, line) {
   const nc      = measure.length;

@@ -6,16 +6,16 @@ const MODULES = [
   {
     to: '/library',
     icon: Library,
-    title: 'Community Library',
-    desc: 'Browse, search and upload sheet music for all string instruments.',
-    tag: 'OMR Ready',
+    title: 'Quest Generator',
+    desc: 'Choose meter, length, and tempo for an infinite random sight-reading run.',
+    tag: 'Random',
   },
   {
     to: '/practice',
     icon: Mic2,
-    title: 'Practice Session',
-    desc: 'Real-time pitch, rhythm & intonation analysis against your sheet music.',
-    tag: 'AI Powered',
+    title: 'Start Quest',
+    desc: 'Generate fresh notation, follow the amber cursor, and score your pitch accuracy.',
+    tag: 'Live Game',
     featured: true,
   },
   {
@@ -111,12 +111,12 @@ export default function Dashboard() {
         <div className="bg-bg-panel rounded-xl border border-white/5 px-6 py-12 text-center">
           <Mic2 size={28} className="mx-auto mb-3 text-text-muted/30" />
           <p className="text-text-muted font-body text-sm">No sessions yet.</p>
-          <p className="text-text-muted/60 font-body text-xs mt-1">Complete a practice session to see your history here.</p>
+          <p className="text-text-muted/60 font-body text-xs mt-1">Complete a sight-reading quest to see your history here.</p>
           <Link
             to="/practice"
             className="inline-block mt-4 bg-accent-amber text-bg-deep font-body font-semibold text-sm px-5 py-2.5 rounded-lg hover:shadow-[0_0_16px_var(--color-accent-amber)/40] transition-all"
           >
-            Start Practicing
+            Start Quest
           </Link>
         </div>
       ) : (
