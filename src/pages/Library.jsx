@@ -3,33 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import JSZip from 'jszip';
 import {
   AlertCircle, CheckCircle2, ChevronRight, Cpu, FileMusic,
-  Gauge, Loader2, Music2, Play, ScanLine, Shuffle, Sparkles,
-  Layers, Search, Target, Timer, Upload,
+  Layers, Loader2, Music2, ScanLine, Search,
 } from 'lucide-react';
 import { useInstrumentStore } from '../store/instrumentStore.js';
 import { PIECES_LIST } from '../utils/samplePieces.js';
-import { generateRandomScore, RANDOM_OPTIONS_KEY } from '../utils/randomScoreGenerator.js';
 import { parseMusicXml } from '../utils/musicXmlParser.js';
 import { checkServerHealth, scanSheetMusicImage } from '../utils/omrClient.js';
 import { evaluateScanQuality } from '../utils/scanQuality.js';
 import OsmdViewer from '../components/OsmdViewer.jsx';
 
 const INSTRUMENT_FILTERS = ['All', 'Violin', 'Viola', 'Cello', 'Double Bass'];
-
-const MEASURE_OPTIONS = [
-  { label: 'Random 8-16', value: 'random' },
-  { label: '8 measures', value: '8' },
-  { label: '12 measures', value: '12' },
-  { label: '16 measures', value: '16' },
-];
-
-const TIME_OPTIONS = [
-  { label: 'Random meter', value: 'random' },
-  { label: '3/4', value: '3/4' },
-  { label: '4/4', value: '4/4' },
-];
-
-const BPM_OPTIONS = [60, 72, 80, 88, 100];
 
 const INSTR_LABEL = {
   violin: 'Violin',
@@ -53,14 +36,6 @@ const DIFFICULTY_COLOR = {
   Advanced: 'text-feedback-error border-feedback-error/30 bg-feedback-error/5',
   Imported: 'text-accent-amber border-accent-amber/30 bg-accent-amber/5',
 };
-
-function buildOptions({ measures, timeSignature, bpm }) {
-  return {
-    ...(measures === 'random' ? {} : { measureCount: Number(measures) }),
-    ...(timeSignature === 'random' ? {} : { timeSignature }),
-    bpm: Number(bpm),
-  };
-}
 
 function loadSavedUploads() {
   try { return JSON.parse(localStorage.getItem(LS_UPLOADS) || '[]'); }
@@ -130,10 +105,6 @@ async function readMusicXmlFromFile(file) {
 export default function Library() {
   const navigate = useNavigate();
   const { instrument } = useInstrumentStore();
-  const [measures, setMeasures] = useState('random');
-  const [timeSignature, setTimeSignature] = useState('random');
-  const [bpm, setBpm] = useState('80');
-  const [preview, setPreview] = useState(() => generateRandomScore({ instrument }));
   const [query, setQuery] = useState('');
   const [filterInstr, setFilterInstr] = useState('All');
   const xmlInputRef = useRef(null);
@@ -145,11 +116,6 @@ export default function Library() {
   const [pendingScan, setPendingScan] = useState(null);
   const [reviewEdits, setReviewEdits] = useState({ title: '', composer: '', clef: 'treble', bpm: 80 });
   const [uploadedSongs, setUploadedSongs] = useState(loadSavedUploads);
-
-  const launchOptions = useMemo(
-    () => buildOptions({ measures, timeSignature, bpm }),
-    [measures, timeSignature, bpm],
-  );
 
   const allSongs = useMemo(() => [...uploadedSongs, ...PIECES_LIST], [uploadedSongs]);
   const filteredSongs = useMemo(() => {
@@ -167,14 +133,6 @@ export default function Library() {
     });
   }, [allSongs, filterInstr, query]);
 
-  function previewQuest() {
-    setPreview(generateRandomScore({ instrument, ...launchOptions }));
-  }
-
-  useEffect(() => {
-    setPreview(generateRandomScore({ instrument, ...launchOptions }));
-  }, [instrument]); // eslint-disable-line react-hooks/exhaustive-deps
-
   useEffect(() => {
     checkServerHealth().then(setServerHealth);
   }, []);
@@ -182,16 +140,6 @@ export default function Library() {
   useEffect(() => () => {
     if (pendingScan?.imageUrl) URL.revokeObjectURL(pendingScan.imageUrl);
   }, [pendingScan?.imageUrl]);
-
-  function startQuest() {
-    sessionStorage.setItem(RANDOM_OPTIONS_KEY, JSON.stringify(launchOptions));
-    navigate('/practice', {
-      state: {
-        randomSeed: Date.now(),
-        randomOptions: launchOptions,
-      },
-    });
-  }
 
   function persistPiece(piece) {
     const saved = loadSavedUploads();
@@ -241,7 +189,7 @@ export default function Library() {
       timeSignature: parsed.timeSignature || '4/4',
       bpm: parsed.bpm || 80,
       instrument: 'all',
-      difficulty: 'Imported',
+      difficulty: 'Beginner',
       isUploaded: true,
       uploadedAt: new Date().toISOString(),
       scannedBy: 'direct-import',
@@ -251,8 +199,7 @@ export default function Library() {
 
     persistPiece(piece);
     setUploadState('success');
-    setUploadMessage(`"${piece.title}" imported. Opening practice.`);
-    practicePiece(piece);
+    setUploadMessage(`"${piece.title}" imported. It is now in your library.`);
   }
 
   async function handleImageScan(file) {
@@ -354,8 +301,7 @@ export default function Library() {
     persistPiece(piece);
     setPendingScan(null);
     setUploadState('success');
-    setUploadMessage(`"${piece.title}" imported after review. Opening practice.`);
-    practicePiece(piece);
+    setUploadMessage(`"${piece.title}" imported after review.`);
   }
 
   const busy = uploadState === 'reading' || uploadState === 'scanning';
@@ -380,165 +326,51 @@ export default function Library() {
     <div className="min-h-screen bg-bg-deep px-6 py-8 md:py-12">
       <div className="mb-8">
         <p className="text-accent-amber font-body text-xs uppercase tracking-widest mb-1">Repository</p>
-        <h1 className="font-header text-3xl md:text-4xl text-text-primary mb-2">
+        <h1 className="font-header text-3xl md:text-4xl text-text-primary mb-1">
           Sheet Music Library
         </h1>
-        <p className="text-text-muted font-body text-sm max-w-2xl">
-          {allSongs.length} {allSongs.length === 1 ? 'piece' : 'pieces'} · {uploadedSongs.length} imported ·
-          upload real repertoire, scan printed pages, or start a random sight-reading quest.
+        <p className="text-text-muted font-body text-sm">
+          {allSongs.length} {allSongs.length === 1 ? 'piece' : 'pieces'}
+          {uploadedSongs.length > 0 && (
+            <span className="text-accent-amber/70"> · {uploadedSongs.length} imported</span>
+          )}
+          {' '}· all adapt automatically to your selected instrument
         </p>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(320px,0.8fr)_minmax(420px,1.2fr)] gap-5">
-        <section className="bg-bg-panel rounded-xl border border-white/5 p-5">
-          <div className="flex items-center gap-2 mb-5">
-            <div className="w-9 h-9 rounded-lg bg-accent-amber/15 text-accent-amber flex items-center justify-center">
-              <Shuffle size={18} />
-            </div>
-            <div>
-              <h2 className="font-header text-xl text-text-primary">Quest Setup</h2>
-              <p className="text-text-muted font-body text-xs">{INSTR_LABEL[instrument]} · generated on demand</p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <label className="block">
-              <span className="flex items-center gap-1.5 text-text-muted font-body text-xs uppercase tracking-widest mb-2">
-                <Music2 size={12} /> Length
-              </span>
-              <select
-                value={measures}
-                onChange={e => setMeasures(e.target.value)}
-                className="w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2.5 text-text-primary font-body text-sm focus:outline-none focus:border-accent-amber/60"
-              >
-                {MEASURE_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="flex items-center gap-1.5 text-text-muted font-body text-xs uppercase tracking-widest mb-2">
-                <Timer size={12} /> Meter
-              </span>
-              <select
-                value={timeSignature}
-                onChange={e => setTimeSignature(e.target.value)}
-                className="w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2.5 text-text-primary font-body text-sm focus:outline-none focus:border-accent-amber/60"
-              >
-                {TIME_OPTIONS.map(option => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="flex items-center gap-1.5 text-text-muted font-body text-xs uppercase tracking-widest mb-2">
-                <Gauge size={12} /> Tempo
-              </span>
-              <select
-                value={bpm}
-                onChange={e => setBpm(e.target.value)}
-                className="w-full bg-bg-deep border border-white/10 rounded-lg px-3 py-2.5 text-text-primary font-body text-sm focus:outline-none focus:border-accent-amber/60"
-              >
-                {BPM_OPTIONS.map(value => (
-                  <option key={value} value={value}>{value} BPM</option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-3 mt-6">
-            <button
-              onClick={startQuest}
-              className="flex items-center justify-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-3 rounded-xl hover:shadow-[0_0_22px_rgba(201,162,39,0.45)] transition-all"
-            >
-              <Play size={16} fill="currentColor" /> Start Quest
-            </button>
-            <button
-              onClick={previewQuest}
-              className="flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-text-muted font-body font-semibold px-5 py-3 rounded-xl hover:text-text-primary hover:border-white/20 transition-all"
-            >
-              <Shuffle size={16} /> Roll Preview
-            </button>
-          </div>
-        </section>
-
-        <section className="bg-bg-panel rounded-xl border border-white/5 p-5">
-          <div className="flex items-center justify-between gap-3 mb-5">
-            <div>
-              <p className="text-accent-amber font-body text-xs uppercase tracking-widest mb-1">Next Roll</p>
-              <h2 className="font-header text-xl text-text-primary">{preview.title}</h2>
-            </div>
-            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full border border-accent-amber/30 bg-accent-amber/10 text-accent-amber font-body text-xs">
-              <Sparkles size={12} /> Random
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-            {[
-              ['Measures', preview.events.length],
-              ['Meter', preview.timeSignature],
-              ['Tempo', `${preview.bpm}`],
-              ['Clef', preview.clef],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-lg border border-white/10 bg-bg-deep/60 px-3 py-3">
-                <p className="text-text-muted font-body text-[10px] uppercase tracking-widest mb-1">{label}</p>
-                <p className="font-header text-2xl text-text-primary capitalize">{value}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="rounded-lg border border-white/10 bg-bg-deep/60 p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <Target size={15} className="text-accent-amber" />
-              <p className="text-text-primary font-body text-sm font-semibold">Generated note stream</p>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {preview.events.flat().slice(0, 48).map((event, idx) => (
-                <span
-                  key={`${event.name}-${idx}`}
-                  className={`px-2 py-1 rounded-md border font-body text-xs
-                    ${event.isRest
-                      ? 'border-white/10 text-text-muted/50 bg-white/5'
-                      : 'border-accent-amber/25 text-accent-amber bg-accent-amber/5'}`}
-                >
-                  {event.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <section className="mt-6 bg-bg-panel rounded-xl border border-white/5 p-5">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-4">
-          <div>
-            <p className="text-accent-amber font-body text-xs uppercase tracking-widest mb-1">Your Music</p>
-            <h2 className="font-header text-2xl text-text-primary">Upload MusicXML or Scan a Page</h2>
-            <p className="text-text-muted font-body text-sm max-w-2xl">
-              MusicXML opens practice immediately. Photos and screenshots go through OMR, then a review gate before feedback.
-            </p>
-          </div>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={() => { if (!busy) xmlInputRef.current?.click(); }}
-              disabled={busy}
-              className="flex items-center justify-center gap-2 bg-white/5 border border-white/10 text-text-primary font-body font-semibold px-5 py-3 rounded-xl hover:border-accent-amber/50 transition-all disabled:opacity-50"
-            >
-              {uploadState === 'reading' ? <Loader2 size={16} className="animate-spin" /> : <FileMusic size={16} />}
-              Upload MusicXML
-            </button>
-            <button
-              onClick={() => { if (!busy) imageInputRef.current?.click(); }}
-              disabled={busy}
-              className="flex items-center justify-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-3 rounded-xl hover:shadow-[0_0_22px_rgba(201,162,39,0.45)] transition-all disabled:opacity-50"
-            >
-              {uploadState === 'scanning' ? <Loader2 size={16} className="animate-spin" /> : <ScanLine size={16} />}
-              Scan Image
-            </button>
-          </div>
+      <div className="flex flex-col sm:flex-row gap-3 mb-3">
+        <div className="relative flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+          <input
+            type="text"
+            placeholder="Search by title, composer..."
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            className="w-full bg-bg-panel border border-white/10 rounded-lg pl-9 pr-4 py-2.5 text-text-primary font-body text-sm placeholder-text-muted focus:outline-none focus:border-accent-amber/60 transition-colors"
+          />
         </div>
+
+        <button
+          onClick={() => { if (!busy) { setUploadState('idle'); xmlInputRef.current?.click(); } }}
+          disabled={busy}
+          className="flex items-center justify-center gap-2 bg-bg-panel border border-white/10 text-text-primary font-body font-semibold px-5 py-2.5 rounded-lg hover:border-accent-amber/50 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {uploadState === 'reading'
+            ? <Loader2 size={15} className="animate-spin" />
+            : <FileMusic size={15} />}
+          {uploadState === 'reading' ? 'Reading...' : 'Upload MusicXML'}
+        </button>
+
+        <button
+          onClick={() => { if (!busy) { setUploadState('idle'); imageInputRef.current?.click(); } }}
+          disabled={busy}
+          className="flex items-center justify-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-2.5 rounded-lg hover:shadow-[0_0_20px_rgba(201,162,39,0.5)] transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {uploadState === 'scanning'
+            ? <Loader2 size={15} className="animate-spin" />
+            : <ScanLine size={15} />}
+          {uploadState === 'scanning' ? 'Scanning...' : 'Hybrid Scan'}
+        </button>
 
         <input
           ref={xmlInputRef}
@@ -554,37 +386,37 @@ export default function Library() {
           className="hidden"
           onChange={handleImageFileUpload}
         />
+      </div>
 
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          <p className="text-text-muted/60 font-body text-xs flex items-center gap-1.5">
-            <Upload size={11} />
-            Direct MusicXML is fastest · image scans are useful but must be checked before practice
-          </p>
-          {engineChip && (
-            <span className={`flex items-center gap-1 text-[10px] font-body px-2 py-0.5 rounded-full border ${engineChip.color}`}>
-              <Cpu size={9} /> {engineChip.label}
-            </span>
-          )}
-          <span className="text-text-muted/50 font-body text-[10px] uppercase tracking-widest">
-            {uploadedSongs.length} imported
+      <div className="flex flex-wrap items-center gap-3 mb-5">
+        <p className="text-text-muted/50 font-body text-xs flex items-center gap-1.5">
+          <FileMusic size={11} />
+          <span className="text-text-muted">MusicXML</span> · instant and most accurate ·
+          <ScanLine size={11} className="ml-1" />
+          <span className="text-text-muted">Screenshot/photo</span> · hybrid OMR with review gate
+        </p>
+        {engineChip && (
+          <span className={`flex items-center gap-1 text-[10px] font-body px-2 py-0.5 rounded-full border ${engineChip.color}`}>
+            <Cpu size={9} /> {engineChip.label}
           </span>
-        </div>
-
-        {banner && (
-          <div className={`flex items-start gap-3 mb-4 px-4 py-3 rounded-xl border ${banner.style}`}>
-            <span className="flex-shrink-0 mt-0.5">{banner.icon}</span>
-            <p className="font-body text-sm flex-1 whitespace-pre-line">{banner.text}</p>
-            {(uploadState === 'error' || uploadState === 'success') && (
-              <button onClick={() => setUploadState('idle')} className="opacity-50 hover:opacity-100">x</button>
-            )}
-          </div>
         )}
+      </div>
 
-        {pendingScan && (
-          <div className="rounded-xl border border-white/10 bg-bg-deep/50 overflow-hidden">
+      {banner && (
+        <div className={`flex items-start gap-3 mb-5 px-4 py-3 rounded-xl border ${banner.style}`}>
+          <span className="flex-shrink-0 mt-0.5">{banner.icon}</span>
+          <p className="font-body text-sm flex-1 min-w-0 whitespace-pre-line">{banner.text}</p>
+          {(uploadState === 'error' || uploadState === 'success') && (
+            <button onClick={() => setUploadState('idle')} className="text-xs opacity-50 hover:opacity-100 flex-shrink-0">x</button>
+          )}
+        </div>
+      )}
+
+      {pendingScan && (
+        <section className="mb-6 rounded-xl border border-white/10 bg-bg-panel/80 overflow-hidden">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 py-3 border-b border-white/10">
               <div>
-                <p className="text-text-muted font-body text-[10px] uppercase tracking-widest">Scan Review</p>
+                <p className="text-text-muted font-body text-[10px] uppercase tracking-widest">Hybrid Scan Review</p>
                 <h3 className="font-header text-xl text-text-primary">{reviewEdits.title || pendingScan.piece.title}</h3>
                 <p className="text-text-muted/70 font-body text-xs">{pendingScan.filename}</p>
               </div>
@@ -673,28 +505,14 @@ export default function Library() {
                   disabled={pendingScan.quality.status === 'fail'}
                   className="flex items-center gap-2 px-4 py-2 rounded-lg bg-accent-amber text-bg-deep font-body font-semibold text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Practice Imported Piece <ChevronRight size={14} />
+                  Approve Import <ChevronRight size={14} />
                 </button>
               </div>
             </div>
-          </div>
-        )}
-      </section>
+        </section>
+      )}
 
-      <section className="mt-8">
-        <div className="flex flex-col sm:flex-row gap-3 mb-4">
-          <div className="relative flex-1">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-            <input
-              type="text"
-              placeholder="Search by title, composer..."
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              className="w-full bg-bg-panel border border-white/10 rounded-lg pl-9 pr-4 py-2.5 text-text-primary font-body text-sm placeholder-text-muted focus:outline-none focus:border-accent-amber/60 transition-colors"
-            />
-          </div>
-        </div>
-
+      <section>
         <div className="flex gap-2 flex-wrap mb-3">
           {INSTRUMENT_FILTERS.map(inst => (
             <button
