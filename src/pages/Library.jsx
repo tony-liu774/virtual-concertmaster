@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import JSZip from 'jszip';
 import {
-  AlertCircle, CheckCircle2, ChevronRight, Cpu, FileMusic,
-  Layers, Loader2, Music2, ScanLine, Search,
+  AlertCircle, CheckCircle2, ChevronRight, Cpu, ExternalLink, FileMusic,
+  Layers, Loader2, Music2, ScanLine, Search, Smartphone, Upload, X,
 } from 'lucide-react';
 import { useInstrumentStore } from '../store/instrumentStore.js';
 import { PIECES_LIST } from '../utils/samplePieces.js';
@@ -23,6 +23,7 @@ const INSTR_LABEL = {
 
 const LS_UPLOADS = 'virtual_concertmaster_uploads';
 const CLEF_OPTIONS = ['treble', 'alto', 'bass'];
+const PLAYSCORE_URL = 'https://www.playscore.co/';
 
 const QUALITY_BADGE = {
   pass: 'border-feedback-success/40 text-feedback-success bg-feedback-success/10',
@@ -126,6 +127,8 @@ export default function Library() {
   const [pendingScan, setPendingScan] = useState(null);
   const [reviewEdits, setReviewEdits] = useState({ title: '', composer: '', clef: 'treble', bpm: 80 });
   const [uploadedSongs, setUploadedSongs] = useState(loadSavedUploads);
+  const [showPlayScoreGuide, setShowPlayScoreGuide] = useState(false);
+  const xmlImportSourceRef = useRef('direct-import');
 
   const checkedUploads = useMemo(
     () => uploadedSongs.map(piece => addRuntimeQuality(piece, instrument)),
@@ -172,9 +175,18 @@ export default function Library() {
     navigate('/practice', { state: { pieceId: piece.id } });
   }
 
-  async function handleXmlImport(file) {
+  function chooseXmlFile(source = 'direct-import') {
+    xmlImportSourceRef.current = source;
+    setShowPlayScoreGuide(false);
+    setUploadState('idle');
+    setUploadMessage('');
+    xmlInputRef.current?.click();
+  }
+
+  async function handleXmlImport(file, source = 'direct-import') {
     setUploadState('reading');
     setPendingScan(null);
+    const importedFromPlayScore = source === 'playscore';
 
     if (file.size > 20 * 1024 * 1024) {
       setUploadState('error');
@@ -211,14 +223,15 @@ export default function Library() {
       difficulty: 'Beginner',
       isUploaded: true,
       uploadedAt: new Date().toISOString(),
-      scannedBy: 'direct-import',
+      scannedBy: importedFromPlayScore ? 'playscore-musicxml' : 'direct-import',
+      importSource: importedFromPlayScore ? 'PlayScore 2' : 'MusicXML',
       musicXmlString: xmlText,
       measures: parsed.measures,
     };
 
     persistPiece(piece);
     setUploadState('success');
-    setUploadMessage(`"${piece.title}" imported. It is now in your library.`);
+    setUploadMessage(`"${piece.title}" imported${importedFromPlayScore ? ' from PlayScore 2' : ''}. It is now in your library.`);
   }
 
   async function handleImageScan(file) {
@@ -278,11 +291,13 @@ export default function Library() {
 
   async function handleXmlFileUpload(e) {
     const file = e.target.files[0];
+    const source = xmlImportSourceRef.current;
+    xmlImportSourceRef.current = 'direct-import';
     if (!file) return;
     e.target.value = '';
     setUploadFile(file.name);
     setUploadMessage('');
-    await handleXmlImport(file);
+    await handleXmlImport(file, source);
   }
 
   async function handleImageFileUpload(e) {
@@ -370,7 +385,16 @@ export default function Library() {
         </div>
 
         <button
-          onClick={() => { if (!busy) { setUploadState('idle'); xmlInputRef.current?.click(); } }}
+          onClick={() => { if (!busy) { setShowPlayScoreGuide(true); } }}
+          disabled={busy}
+          className="flex items-center justify-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-2.5 rounded-lg hover:shadow-[0_0_20px_rgba(201,162,39,0.5)] transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <Smartphone size={15} />
+          PlayScore 2
+        </button>
+
+        <button
+          onClick={() => { if (!busy) { chooseXmlFile('direct-import'); } }}
           disabled={busy}
           className="flex items-center justify-center gap-2 bg-bg-panel border border-white/10 text-text-primary font-body font-semibold px-5 py-2.5 rounded-lg hover:border-accent-amber/50 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
@@ -383,7 +407,7 @@ export default function Library() {
         <button
           onClick={() => { if (!busy) { setUploadState('idle'); imageInputRef.current?.click(); } }}
           disabled={busy}
-          className="flex items-center justify-center gap-2 bg-accent-amber text-bg-deep font-body font-semibold px-5 py-2.5 rounded-lg hover:shadow-[0_0_20px_rgba(201,162,39,0.5)] transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 bg-bg-panel border border-white/10 text-text-primary font-body font-semibold px-5 py-2.5 rounded-lg hover:border-accent-amber/50 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {uploadState === 'scanning'
             ? <Loader2 size={15} className="animate-spin" />
@@ -411,6 +435,8 @@ export default function Library() {
         <p className="text-text-muted/50 font-body text-xs flex items-center gap-1.5">
           <FileMusic size={11} />
           <span className="text-text-muted">MusicXML</span> · instant and most accurate ·
+          <Smartphone size={11} className="ml-1" />
+          <span className="text-text-muted">PlayScore 2</span> · scan then export MusicXML ·
           <ScanLine size={11} className="ml-1" />
           <span className="text-text-muted">Screenshot/photo</span> · hybrid OMR with review gate
         </p>
@@ -428,6 +454,69 @@ export default function Library() {
           {(uploadState === 'error' || uploadState === 'success') && (
             <button onClick={() => setUploadState('idle')} className="text-xs opacity-50 hover:opacity-100 flex-shrink-0">x</button>
           )}
+        </div>
+      )}
+
+      {showPlayScoreGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4">
+          <section className="w-full max-w-2xl rounded-xl border border-white/10 bg-bg-panel shadow-2xl overflow-hidden">
+            <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4">
+              <div>
+                <p className="text-accent-amber font-body text-[10px] uppercase tracking-widest">MusicXML Import</p>
+                <h2 className="font-header text-2xl text-text-primary">PlayScore 2</h2>
+              </div>
+              <button
+                onClick={() => setShowPlayScoreGuide(false)}
+                className="h-9 w-9 rounded-lg border border-white/10 text-text-muted hover:text-text-primary hover:border-white/25 flex items-center justify-center"
+                aria-label="Close PlayScore import"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+                {[
+                  ['1', 'Scan', 'Capture the page in PlayScore 2.'],
+                  ['2', 'Export', 'Save as MusicXML or MXL.'],
+                  ['3', 'Import', 'Open that file here.'],
+                ].map(([step, title, copy]) => (
+                  <div key={step} className="rounded-lg border border-white/10 bg-bg-deep/50 p-4">
+                    <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-accent-amber text-bg-deep font-body text-xs font-bold mb-3">
+                      {step}
+                    </span>
+                    <h3 className="font-body text-sm font-semibold text-text-primary mb-1">{title}</h3>
+                    <p className="font-body text-xs leading-relaxed text-text-muted">{copy}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-lg border border-accent-amber/20 bg-accent-amber/5 px-4 py-3 mb-5">
+                <p className="font-body text-sm text-text-primary">
+                  Use the exported MusicXML file for practice feedback. It is much more reliable than asking the local screenshot scanner to guess a dense classical page.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
+                <a
+                  href={PLAYSCORE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center justify-center gap-2 rounded-lg border border-white/10 px-4 py-2.5 font-body text-sm font-semibold text-text-primary hover:border-accent-amber/50 transition-colors"
+                >
+                  <ExternalLink size={15} />
+                  Open PlayScore
+                </a>
+                <button
+                  onClick={() => chooseXmlFile('playscore')}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-accent-amber px-4 py-2.5 font-body text-sm font-semibold text-bg-deep hover:shadow-[0_0_20px_rgba(201,162,39,0.45)] transition-all"
+                >
+                  <Upload size={15} />
+                  Choose MusicXML
+                </button>
+              </div>
+            </div>
+          </section>
         </div>
       )}
 
@@ -592,6 +681,8 @@ export default function Library() {
                   >
                     {piece.scanBlocked
                       ? <><AlertCircle size={8} /> Needs rescan</>
+                      : piece.scannedBy === 'playscore-musicxml'
+                      ? <><Smartphone size={8} /> PlayScore 2</>
                       : piece.scannedBy && piece.scannedBy !== 'direct-import'
                       ? <><ScanLine size={8} /> {piece.scannedBy}</>
                       : <><FileMusic size={8} /> MusicXML</>}
