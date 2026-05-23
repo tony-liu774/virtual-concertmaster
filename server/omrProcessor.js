@@ -5,8 +5,8 @@
  * The server never calls OpenAI — all processing is deterministic.
  *
  * Engine priority:
- *   1. Oemer CLI          (pip install oemer)
- *   2. Audiveris CLI      (brew install audiveris  OR  manual .jar install)
+ *   1. Audiveris CLI/app  (https://github.com/Audiveris/audiveris/releases)
+ *   2. Oemer CLI          (pip install oemer)
  *   3. Remote OMR service (any HTTP endpoint set via OMR_ENDPOINT env var)
  *
  * If none can produce a reliable result, a scan-guidance error is returned.
@@ -15,7 +15,8 @@
  *   OEMER_CLI            — command name or full path to oemer       (default: "oemer")
  *   OEMER_ARGS           — optional extra oemer CLI args
  *   OEMER_TIMEOUT_MS     — max time for one Oemer attempt           (default: 90000)
- *   AUDIVERIS_CLI        — command name or full path to audiveris   (default: "audiveris")
+ *   AUDIVERIS_CLI        — command name or full path to Audiveris
+ *                          (auto-detects common macOS app locations)
  *   AUDIVERIS_TIMEOUT_MS — max time for one Audiveris attempt       (default: 120000)
  *   OMR_ENDPOINT         — URL of a hosted OMR REST service
  *                          Expects POST { image: "<base64>", mediaType: "image/png" }
@@ -40,6 +41,17 @@ const _cmdCache = {};
 
 function isCommandAvailable(cmd) {
   if (cmd in _cmdCache) return _cmdCache[cmd];
+
+  if (cmd.includes(path.sep)) {
+    try {
+      fs.accessSync(cmd, fs.constants.X_OK);
+      _cmdCache[cmd] = true;
+    } catch {
+      _cmdCache[cmd] = false;
+    }
+    return _cmdCache[cmd];
+  }
+
   try {
     const probe = process.platform === 'win32'
       ? `where "${cmd}"`
@@ -50,6 +62,19 @@ function isCommandAvailable(cmd) {
     _cmdCache[cmd] = false;
   }
   return _cmdCache[cmd];
+}
+
+function firstAvailableCommand(commands) {
+  return commands.find(cmd => cmd && isCommandAvailable(cmd)) ?? '';
+}
+
+function resolveAudiverisCommand() {
+  return firstAvailableCommand([
+    process.env.AUDIVERIS_CLI,
+    'audiveris',
+    path.join(os.homedir(), 'Applications/Audiveris.app/Contents/MacOS/Audiveris'),
+    '/Applications/Audiveris.app/Contents/MacOS/Audiveris',
+  ]);
 }
 
 // ── Engine 1: Oemer ────────────────────────────────────────────────────────
@@ -201,18 +226,17 @@ async function runOemer(imagePath, { assumeDeskewed = false } = {}) {
 }
 
 // ── Engine 2: Audiveris ────────────────────────────────────────────────────
-// Install:  brew install audiveris   OR   https://github.com/Audiveris/audiveris/releases
+// Install:  https://github.com/Audiveris/audiveris/releases
 // Docs:     https://github.com/Audiveris/audiveris
 
-async function runAudiveris(imagePath) {
-  const cmd     = process.env.AUDIVERIS_CLI || 'audiveris';
+async function runAudiveris(imagePath, command = '') {
+  const cmd     = command || resolveAudiverisCommand() || 'audiveris';
   const timeout = timeoutMs('AUDIVERIS_TIMEOUT_MS', DEFAULT_AUDIVERIS_TIMEOUT_MS);
   const outDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_audiveris_'));
-  const base    = path.basename(imagePath, path.extname(imagePath));
 
   try {
     try {
-      await execFileAsync(cmd, ['-batch', '-export', '-output', outDir, imagePath], {
+      await execFileAsync(cmd, ['-batch', '-transcribe', '-export', '-output', outDir, imagePath], {
         timeout,
         killSignal: 'SIGKILL',
         maxBuffer: 50 * 1024 * 1024,
@@ -224,20 +248,31 @@ async function runAudiveris(imagePath) {
       throw err;
     }
 
-    // Audiveris creates outDir/<bookname>/<bookname>.xml  (or .mxl)
-    const xmlPath = path.join(outDir, base, base + '.xml');
-    const mxlPath = path.join(outDir, base, base + '.mxl');
-
-    if (fs.existsSync(xmlPath)) {
-      return fs.readFileSync(xmlPath, 'utf-8');
+    // Audiveris can place output under outDir/<bookname>/ or directly in outDir.
+    const outputFiles = findFiles(outDir, file => /\.(musicxml|xml|mxl)$/i.test(file));
+    const scoreFile = outputFiles.find(file => !/container\.xml$/i.test(file));
+    if (!scoreFile) {
+      const produced = findFiles(outDir).map(file => path.relative(outDir, file)).join(', ') || 'nothing';
+      throw new Error(`Audiveris output not found. Expected MusicXML/MXL; got ${produced}.`);
     }
-    if (fs.existsSync(mxlPath)) {
-      return readMxlMusicXml(mxlPath);
-    }
-    throw new Error(`Audiveris output not found. Checked: ${xmlPath}`);
+    if (/\.mxl$/i.test(scoreFile)) return readMxlMusicXml(scoreFile);
+    return fs.readFileSync(scoreFile, 'utf-8');
   } finally {
     fs.rmSync(outDir, { recursive: true, force: true });
   }
+}
+
+function findFiles(dir, predicate = () => true) {
+  const files = [];
+  if (!fs.existsSync(dir)) return files;
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...findFiles(fullPath, predicate));
+    else if (predicate(fullPath)) files.push(fullPath);
+  }
+
+  return files;
 }
 
 // ── Engine 3: Remote OMR service ───────────────────────────────────────────
@@ -272,11 +307,10 @@ function buildInstallError(engineErrors) {
     'No OMR engine produced a reliable MusicXML scan.\n\n' +
     'For the best result, upload a .musicxml/.mxl file. For screenshot scanning, use a tight crop of only the white sheet-music page, taken straight-on with good contrast.\n\n' +
     'Available engine setup options:\n\n' +
-    '  • Oemer (Python, recommended for most scores)\n' +
-    '      pip install oemer\n\n' +
     '  • Audiveris (Java, best for complex classical scores)\n' +
-    '      brew install audiveris   (macOS)\n' +
-    '      https://github.com/Audiveris/audiveris/releases\n\n' +
+    '      Install the macOS app from https://github.com/Audiveris/audiveris/releases\n\n' +
+    '  • Oemer (Python fallback)\n' +
+    '      pip install oemer\n\n' +
     '  • Remote service: set OMR_ENDPOINT in server/.env\n\n' +
     'Engine errors this run:\n' +
     engineErrors.map(e => `  – ${e}`).join('\n')
@@ -292,7 +326,7 @@ function buildInstallError(engineErrors) {
 export function getAvailableEngines() {
   return {
     oemer:      isCommandAvailable(process.env.OEMER_CLI     || 'oemer'),
-    audiveris:  isCommandAvailable(process.env.AUDIVERIS_CLI || 'audiveris'),
+    audiveris:  !!resolveAudiverisCommand(),
     remote:     !!process.env.OMR_ENDPOINT,
   };
 }
@@ -311,7 +345,7 @@ export async function processOMR({ imagePath, base64, mediaType }) {
   const errors = [];
   let suspiciousCandidate = null;
   const oemerCmd     = process.env.OEMER_CLI     || 'oemer';
-  const audiverisCmd = process.env.AUDIVERIS_CLI || 'audiveris';
+  const audiverisCmd = resolveAudiverisCommand();
   const { variants, warning: preprocessingWarning } = await makeOmrImageVariants(imagePath);
 
   if (preprocessingWarning) errors.push(`Preprocessing: ${preprocessingWarning}`);
@@ -329,7 +363,25 @@ export async function processOMR({ imagePath, base64, mediaType }) {
   }
 
   try {
-    // ── 1. Oemer ───────────────────────────────────────────────────
+    // ── 1. Audiveris ───────────────────────────────────────────────
+    if (audiverisCmd) {
+      for (const variant of variants) {
+        try {
+          console.log(`[OMR] Trying Audiveris (${variant.label})…`);
+          const xml = await runAudiveris(variant.path, audiverisCmd);
+          console.log(`[OMR] Audiveris succeeded (${variant.label}).`);
+          const candidate = acceptOrFallback('audiveris', xml, variant.label);
+          if (candidate) return candidate;
+        } catch (err) {
+          console.warn(`[OMR] Audiveris failed (${variant.label}):`, err.message);
+          errors.push(`Audiveris (${variant.label}): ${err.message}`);
+        }
+      }
+    } else {
+      errors.push('Audiveris: command not found. Install the macOS app from https://github.com/Audiveris/audiveris/releases');
+    }
+
+    // ── 2. Oemer ───────────────────────────────────────────────────
     if (isCommandAvailable(oemerCmd)) {
       for (const variant of variants) {
         try {
@@ -345,24 +397,6 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       }
     } else {
       errors.push('Oemer: command not found (pip install oemer)');
-    }
-
-    // ── 2. Audiveris ───────────────────────────────────────────────
-    if (isCommandAvailable(audiverisCmd)) {
-      for (const variant of variants) {
-        try {
-          console.log(`[OMR] Trying Audiveris (${variant.label})…`);
-          const xml = await runAudiveris(variant.path);
-          console.log(`[OMR] Audiveris succeeded (${variant.label}).`);
-          const candidate = acceptOrFallback('audiveris', xml, variant.label);
-          if (candidate) return candidate;
-        } catch (err) {
-          console.warn(`[OMR] Audiveris failed (${variant.label}):`, err.message);
-          errors.push(`Audiveris (${variant.label}): ${err.message}`);
-        }
-      }
-    } else {
-      errors.push('Audiveris: command not found (brew install audiveris)');
     }
 
     // ── 3. Remote endpoint ─────────────────────────────────────────

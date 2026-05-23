@@ -343,7 +343,7 @@ export default function Library() {
     if (!serverHealth) return null;
     if (!serverHealth.ok) return { label: 'OMR offline', color: 'text-feedback-error/70 border-feedback-error/20' };
     const e = serverHealth.engines ?? {};
-    const active = [e.oemer && 'Oemer', e.audiveris && 'Audiveris', e.remote && 'Remote'].filter(Boolean);
+    const active = [e.audiveris && 'Audiveris', e.oemer && 'Oemer', e.remote && 'Remote'].filter(Boolean);
     if (active.length === 0) return { label: 'No engine', color: 'text-accent-amber/70 border-accent-amber/20' };
     return { label: active.join(' · '), color: 'text-feedback-success/80 border-feedback-success/20' };
   })();

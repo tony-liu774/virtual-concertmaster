@@ -11,7 +11,7 @@
  *
  *  Optional env vars (set in server/.env):
  *    OEMER_CLI       — path/name of the oemer command   (default: "oemer")
- *    AUDIVERIS_CLI   — path/name of audiveris command   (default: "audiveris")
+ *    AUDIVERIS_CLI   — path/name of Audiveris command/app executable
  *    OMR_ENDPOINT    — URL of a hosted remote OMR service
  *    API_PORT        — override the default port 3001
  * ──────────────────────────────────────────────────────────────────
