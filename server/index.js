@@ -22,7 +22,7 @@ import fs                                  from 'fs';
 import path                                from 'path';
 import os                                  from 'os';
 import dotenv                              from 'dotenv';
-import { processOMR, getAvailableEngines } from './omrProcessor.js';
+import { processOMR, getAvailableEngines, getEngineOrder } from './omrProcessor.js';
 
 dotenv.config({ quiet: true });
 dotenv.config({ path: path.resolve(process.cwd(), 'server/.env'), override: true, quiet: true });
@@ -45,7 +45,15 @@ app.use((_req, res, next) => {
 app.get('/api/health', (_req, res) => {
   const engines      = getAvailableEngines();
   const anyAvailable = engines.oemer || engines.audiveris || engines.remote;
-  res.json({ ok: true, engines, anyAvailable, version: '3.0.0' });
+  const engineOrder  = getEngineOrder();
+  res.json({
+    ok: true,
+    engines,
+    engineOrder,
+    preferredEngine: engineOrder[0] ?? '',
+    anyAvailable,
+    version: '3.0.0',
+  });
 });
 
 // ── POST /api/omr-scan ────────────────────────────────────────────
@@ -102,7 +110,8 @@ app.post('/api/omr-scan', async (req, res) => {
     return res.status(422).json(result);
   }
 
-  console.log(`[/api/omr-scan] ✓ ${result.engine} — ${result.musicXmlString.length} chars`);
+  const elapsed = result.scanMeta?.elapsedMs ? ` in ${(result.scanMeta.elapsedMs / 1000).toFixed(1)}s` : '';
+  console.log(`[/api/omr-scan] ✓ ${result.engine}${elapsed} — ${result.musicXmlString.length} chars`);
   return res.status(200).json({
     success:        true,
     musicXmlString: result.musicXmlString,
@@ -110,13 +119,13 @@ app.post('/api/omr-scan', async (req, res) => {
     preprocessing:  result.preprocessing,
     warning:        result.warning || undefined,
     inspection:     result.inspection,
+    scanMeta:       result.scanMeta,
   });
 });
 
 // ── Start ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  const engines = getAvailableEngines();
-  const found   = Object.entries(engines).filter(([, v]) => v).map(([k]) => k);
+  const found   = getEngineOrder();
   console.log(`[VC OMR Server] http://localhost:${PORT}`);
-  console.log(`[VC OMR Server] Engines: ${found.length ? found.join(', ') : 'none — install oemer (pip install oemer)'}`);
+  console.log(`[VC OMR Server] Engines: ${found.length ? found.join(', ') : 'none — install Audiveris or oemer'}`);
 });

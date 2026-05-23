@@ -24,7 +24,7 @@ const SCAN_TIMEOUT_MS = 180_000;
  * Ping the OMR server and return its health payload.
  * Returns { ok: false } if the server is not running.
  *
- * @returns {Promise<{ ok: boolean, engines?: object, anyAvailable?: boolean }>}
+ * @returns {Promise<{ ok: boolean, engines?: object, engineOrder?: string[], preferredEngine?: string, anyAvailable?: boolean }>}
  */
 export async function checkServerHealth() {
   try {
@@ -88,7 +88,7 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
     return { success: false, error: data.error ?? 'OMR processing failed.' };
   }
 
-  const { musicXmlString, engine, preprocessing, warning, inspection } = data;
+  const { musicXmlString, engine, preprocessing, warning, inspection, scanMeta } = data;
 
   if (!musicXmlString || typeof musicXmlString !== 'string' || musicXmlString.length < 100) {
     return { success: false, error: 'Server returned an empty MusicXML document.' };
@@ -115,10 +115,11 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
       difficulty:     'Beginner',
       isUploaded:     true,
       uploadedAt:     new Date().toISOString(),
-      scannedBy:      engine,             // 'oemer' | 'audiveris' | 'remote'
+      scannedBy:      engine,             // 'audiveris' | 'oemer' | 'remote'
       preprocessing:  preprocessing || 'original',
       engineWarning:  warning ?? '',
       engineInspection: inspection ?? null,
+      scanMeta:       scanMeta ?? null,
       musicXmlString,                     // OSMD renders this directly
       measures:       parsed.measures,    // pitch-detection tick loop
     },

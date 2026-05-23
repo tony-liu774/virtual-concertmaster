@@ -38,6 +38,22 @@ const DIFFICULTY_COLOR = {
   Imported: 'text-accent-amber border-accent-amber/30 bg-accent-amber/5',
 };
 
+const ENGINE_LABEL = {
+  audiveris: 'Audiveris',
+  oemer: 'Oemer',
+  remote: 'Remote OMR',
+};
+
+function engineLabel(engine = '') {
+  return ENGINE_LABEL[engine] ?? engine;
+}
+
+function scanSeconds(scanMeta) {
+  const elapsedMs = scanMeta?.elapsedMs;
+  if (!elapsedMs) return '';
+  return `${(elapsedMs / 1000).toFixed(elapsedMs >= 10_000 ? 0 : 1)}s`;
+}
+
 function loadSavedUploads() {
   try { return JSON.parse(localStorage.getItem(LS_UPLOADS) || '[]'); }
   catch { return []; }
@@ -282,10 +298,13 @@ export default function Library() {
     });
     setPendingScan({ piece, quality, imageUrl, filename: file.name });
     setUploadState('review');
+    const scannedBy = engineLabel(piece.scannedBy);
+    const elapsed = scanSeconds(piece.scanMeta);
+    const scanDetail = [scannedBy, elapsed].filter(Boolean).join(' in ');
     setUploadMessage(
       quality.status === 'fail'
-        ? `"${file.name}" scanned, but it failed quality checks.`
-        : `"${piece.title}" scanned. Review it before practice.`,
+        ? `"${file.name}" scanned${scanDetail ? ` with ${scanDetail}` : ''}, but it failed quality checks.`
+        : `"${piece.title}" scanned${scanDetail ? ` with ${scanDetail}` : ''}. Review it before practice.`,
     );
   }
 
@@ -343,14 +362,16 @@ export default function Library() {
     if (!serverHealth) return null;
     if (!serverHealth.ok) return { label: 'OMR offline', color: 'text-feedback-error/70 border-feedback-error/20' };
     const e = serverHealth.engines ?? {};
-    const active = [e.audiveris && 'Audiveris', e.oemer && 'Oemer', e.remote && 'Remote'].filter(Boolean);
+    const active = serverHealth.engineOrder?.length
+      ? serverHealth.engineOrder.map(engineLabel)
+      : [e.audiveris && 'Audiveris', e.oemer && 'Oemer', e.remote && 'Remote'].filter(Boolean);
     if (active.length === 0) return { label: 'No engine', color: 'text-accent-amber/70 border-accent-amber/20' };
-    return { label: active.join(' · '), color: 'text-feedback-success/80 border-feedback-success/20' };
+    return { label: `Open OMR: ${active.join(' -> ')}`, color: 'text-feedback-success/80 border-feedback-success/20' };
   })();
 
   const banner = uploadState === 'idle' ? null : {
     reading: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Reading "${uploadFile}"...` },
-    scanning: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Scanning "${uploadFile}"... fast mode stops after about 90 seconds if the OMR engine cannot read it.` },
+    scanning: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Scanning "${uploadFile}" with open-source OMR... Audiveris is tried first, then fallback engines if needed.` },
     review: { icon: <ScanLine size={16} />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: uploadMessage },
     success: { icon: <CheckCircle2 size={16} />, style: 'border-feedback-success/30 bg-feedback-success/10 text-feedback-success', text: uploadMessage },
     error: { icon: <AlertCircle size={16} />, style: 'border-feedback-error/30 bg-feedback-error/10 text-feedback-error', text: uploadMessage },
@@ -412,7 +433,7 @@ export default function Library() {
           {uploadState === 'scanning'
             ? <Loader2 size={15} className="animate-spin" />
             : <ScanLine size={15} />}
-          {uploadState === 'scanning' ? 'Scanning...' : 'Hybrid Scan'}
+          {uploadState === 'scanning' ? 'Scanning...' : 'Open OMR Scan'}
         </button>
 
         <input
@@ -438,7 +459,7 @@ export default function Library() {
           <Smartphone size={11} className="ml-1" />
           <span className="text-text-muted">PlayScore 2</span> · scan then export MusicXML ·
           <ScanLine size={11} className="ml-1" />
-          <span className="text-text-muted">Screenshot/photo</span> · hybrid OMR with review gate
+          <span className="text-text-muted">Screenshot/photo</span> · open-source OMR with review gate
         </p>
         {engineChip && (
           <span className={`flex items-center gap-1 text-[10px] font-body px-2 py-0.5 rounded-full border ${engineChip.color}`}>
@@ -524,7 +545,7 @@ export default function Library() {
         <section className="mb-6 rounded-xl border border-white/10 bg-bg-panel/80 overflow-hidden">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 px-4 py-3 border-b border-white/10">
               <div>
-                <p className="text-text-muted font-body text-[10px] uppercase tracking-widest">Hybrid Scan Review</p>
+                <p className="text-text-muted font-body text-[10px] uppercase tracking-widest">Open OMR Review</p>
                 <h3 className="font-header text-xl text-text-primary">{reviewEdits.title || pendingScan.piece.title}</h3>
                 <p className="text-text-muted/70 font-body text-xs">{pendingScan.filename}</p>
               </div>
@@ -603,6 +624,19 @@ export default function Library() {
                 <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
                   {pendingScan.quality.metrics.noteCount} notes
                 </span>
+                <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                  {engineLabel(pendingScan.piece.scannedBy)}
+                </span>
+                {pendingScan.piece.preprocessing && (
+                  <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                    {pendingScan.piece.preprocessing}
+                  </span>
+                )}
+                {scanSeconds(pendingScan.piece.scanMeta) && (
+                  <span className="text-[10px] font-body uppercase tracking-wider px-2 py-1 rounded-full border border-white/10 text-text-muted">
+                    {scanSeconds(pendingScan.piece.scanMeta)}
+                  </span>
+                )}
               </div>
               <div className="flex gap-2">
                 <button onClick={discardPendingScan} className="px-4 py-2 rounded-lg border border-white/10 text-text-muted font-body text-sm hover:text-text-primary">
@@ -684,7 +718,7 @@ export default function Library() {
                       : piece.scannedBy === 'playscore-musicxml'
                       ? <><Smartphone size={8} /> PlayScore 2</>
                       : piece.scannedBy && piece.scannedBy !== 'direct-import'
-                      ? <><ScanLine size={8} /> {piece.scannedBy}</>
+                      ? <><ScanLine size={8} /> {engineLabel(piece.scannedBy)}</>
                       : <><FileMusic size={8} /> MusicXML</>}
                   </span>
                 )}

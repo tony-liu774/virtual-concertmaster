@@ -139,13 +139,18 @@ function inspectMusicXml(xml) {
   };
 }
 
-function buildCandidate(engine, xml, preprocessing = 'original') {
+function buildCandidate(engine, xml, preprocessing = 'original', scanMeta = {}) {
   const inspection = inspectMusicXml(xml);
   return {
     success: true,
     musicXmlString: xml,
     engine,
     preprocessing,
+    scanMeta: {
+      engine,
+      preprocessing,
+      ...scanMeta,
+    },
     warning: inspection.suspicious
       ? `${engine} (${preprocessing}) produced suspicious MusicXML: ${inspection.reason}`
       : '',
@@ -331,6 +336,11 @@ export function getAvailableEngines() {
   };
 }
 
+export function getEngineOrder() {
+  const engines = getAvailableEngines();
+  return ['audiveris', 'oemer', 'remote'].filter(engine => engines[engine]);
+}
+
 /**
  * Run the best available OMR engine on an image file.
  *
@@ -350,8 +360,8 @@ export async function processOMR({ imagePath, base64, mediaType }) {
 
   if (preprocessingWarning) errors.push(`Preprocessing: ${preprocessingWarning}`);
 
-  function acceptOrFallback(engine, xml, preprocessing = 'original') {
-    const candidate = buildCandidate(engine, xml, preprocessing);
+  function acceptOrFallback(engine, xml, preprocessing = 'original', scanMeta = {}) {
+    const candidate = buildCandidate(engine, xml, preprocessing, scanMeta);
     if (!candidate.inspection.suspicious) return candidate;
 
     console.warn(`[OMR] ${candidate.warning}; trying fallback if available.`);
@@ -368,9 +378,13 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       for (const variant of variants) {
         try {
           console.log(`[OMR] Trying Audiveris (${variant.label})…`);
+          const startedAt = Date.now();
           const xml = await runAudiveris(variant.path, audiverisCmd);
           console.log(`[OMR] Audiveris succeeded (${variant.label}).`);
-          const candidate = acceptOrFallback('audiveris', xml, variant.label);
+          const candidate = acceptOrFallback('audiveris', xml, variant.label, {
+            elapsedMs: Date.now() - startedAt,
+            openSource: true,
+          });
           if (candidate) return candidate;
         } catch (err) {
           console.warn(`[OMR] Audiveris failed (${variant.label}):`, err.message);
@@ -386,9 +400,13 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       for (const variant of variants) {
         try {
           console.log(`[OMR] Trying Oemer (${variant.label})…`);
+          const startedAt = Date.now();
           const xml = await runOemer(variant.path, { assumeDeskewed: variant.label === 'cleaned' });
           console.log(`[OMR] Oemer succeeded (${variant.label}).`);
-          const candidate = acceptOrFallback('oemer', xml, variant.label);
+          const candidate = acceptOrFallback('oemer', xml, variant.label, {
+            elapsedMs: Date.now() - startedAt,
+            openSource: true,
+          });
           if (candidate) return candidate;
         } catch (err) {
           console.warn(`[OMR] Oemer failed (${variant.label}):`, err.message);
@@ -403,9 +421,13 @@ export async function processOMR({ imagePath, base64, mediaType }) {
     if (process.env.OMR_ENDPOINT) {
       try {
         console.log('[OMR] Trying remote endpoint:', process.env.OMR_ENDPOINT);
+        const startedAt = Date.now();
         const xml = await callRemoteEndpoint(base64, mediaType);
         console.log('[OMR] Remote endpoint succeeded.');
-        const candidate = acceptOrFallback('remote', xml);
+        const candidate = acceptOrFallback('remote', xml, 'original', {
+          elapsedMs: Date.now() - startedAt,
+          openSource: false,
+        });
         if (candidate) return candidate;
       } catch (err) {
         console.warn('[OMR] Remote endpoint failed:', err.message);
