@@ -335,7 +335,7 @@ export default function Library() {
 
   const banner = uploadState === 'idle' ? null : {
     reading: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Reading "${uploadFile}"...` },
-    scanning: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Scanning "${uploadFile}"... this can take several minutes locally.` },
+    scanning: { icon: <Loader2 size={16} className="animate-spin" />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: `Scanning "${uploadFile}"... fast mode stops after about 90 seconds if the OMR engine cannot read it.` },
     review: { icon: <ScanLine size={16} />, style: 'border-accent-amber/30 bg-accent-amber/10 text-accent-amber', text: uploadMessage },
     success: { icon: <CheckCircle2 size={16} />, style: 'border-feedback-success/30 bg-feedback-success/10 text-feedback-success', text: uploadMessage },
     error: { icon: <AlertCircle size={16} />, style: 'border-feedback-error/30 bg-feedback-error/10 text-feedback-error', text: uploadMessage },

@@ -43,6 +43,7 @@ async function findPython() {
 }
 
 export async function makeOmrImageVariants(imagePath) {
+  const includeOriginalFallback = process.env.OMR_TRY_ORIGINAL_FALLBACK === '1';
   const variants = [{ label: 'original', path: imagePath, cleanup: false }];
   const python = await findPython();
   if (!python) {
@@ -62,7 +63,11 @@ export async function makeOmrImageVariants(imagePath) {
       maxBuffer: 8 * 1024 * 1024,
     });
     if (fs.existsSync(cleanedPath) && fs.statSync(cleanedPath).size > 1000) {
-      variants.unshift({ label: 'cleaned', path: cleanedPath, cleanup: true, outDir });
+      if (includeOriginalFallback) {
+        variants.unshift({ label: 'cleaned', path: cleanedPath, cleanup: true, outDir });
+      } else {
+        variants.splice(0, variants.length, { label: 'cleaned', path: cleanedPath, cleanup: true, outDir });
+      }
       return { variants, warning: '' };
     }
     fs.rmSync(outDir, { recursive: true, force: true });

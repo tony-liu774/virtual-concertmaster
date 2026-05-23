@@ -16,6 +16,7 @@
 import { parseMusicXml } from './musicXmlParser.js';
 
 const SERVER_URL = 'http://localhost:3001';
+const SCAN_TIMEOUT_MS = 180_000;
 
 // ── Server health check ───────────────────────────────────────────
 
@@ -56,10 +57,17 @@ export async function scanSheetMusicImage({ base64, mediaType, filename = '' }) 
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ base64, mediaType, filename }),
-      signal:  AbortSignal.timeout(660_000),   // Oemer can take 5-10 min locally.
+      signal:  AbortSignal.timeout(SCAN_TIMEOUT_MS),
     });
   } catch (err) {
-    const isOffline = err.name === 'TypeError' || err.name === 'AbortError';
+    if (err.name === 'TimeoutError' || err.name === 'AbortError') {
+      return {
+        success: false,
+        error: 'OMR scan timed out. Try a tighter crop of only the sheet music, a brighter/straighter image, or upload MusicXML for accurate feedback.',
+      };
+    }
+
+    const isOffline = err.name === 'TypeError';
     return {
       success: false,
       error: isOffline

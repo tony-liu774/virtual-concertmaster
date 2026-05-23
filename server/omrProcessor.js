@@ -9,17 +9,20 @@
  *   2. Audiveris CLI      (brew install audiveris  OR  manual .jar install)
  *   3. Remote OMR service (any HTTP endpoint set via OMR_ENDPOINT env var)
  *
- * If none are available a detailed installation-guide error is returned.
+ * If none can produce a reliable result, a scan-guidance error is returned.
  *
  * Environment variables (all optional, set in server/.env):
- *   OEMER_CLI       — command name or full path to oemer       (default: "oemer")
- *   AUDIVERIS_CLI   — command name or full path to audiveris   (default: "audiveris")
- *   OMR_ENDPOINT    — URL of a hosted OMR REST service
- *                     Expects POST { image: "<base64>", mediaType: "image/png" }
- *                     Returns     { musicXmlString: "<?xml …" }
+ *   OEMER_CLI            — command name or full path to oemer       (default: "oemer")
+ *   OEMER_ARGS           — optional extra oemer CLI args
+ *   OEMER_TIMEOUT_MS     — max time for one Oemer attempt           (default: 90000)
+ *   AUDIVERIS_CLI        — command name or full path to audiveris   (default: "audiveris")
+ *   AUDIVERIS_TIMEOUT_MS — max time for one Audiveris attempt       (default: 120000)
+ *   OMR_ENDPOINT         — URL of a hosted OMR REST service
+ *                          Expects POST { image: "<base64>", mediaType: "image/png" }
+ *                          Returns     { musicXmlString: "<?xml …" }
  */
 
-import { exec, execSync } from 'child_process';
+import { execFile, execSync } from 'child_process';
 import { promisify }      from 'util';
 import fs                 from 'fs';
 import path               from 'path';
@@ -27,7 +30,9 @@ import os                 from 'os';
 import JSZip              from 'jszip';
 import { makeOmrImageVariants, cleanupOmrImageVariants } from './imagePreprocessor.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const DEFAULT_OEMER_TIMEOUT_MS = 90_000;
+const DEFAULT_AUDIVERIS_TIMEOUT_MS = 120_000;
 
 // ── Command availability (cached per process lifetime) ─────────────────────
 
@@ -135,16 +140,47 @@ function candidateScore(candidate) {
   return score;
 }
 
-async function runOemer(imagePath) {
+function timeoutMs(envName, fallback) {
+  const parsed = Number(process.env[envName]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function splitArgs(value = '') {
+  return value
+    .split(/\s+/)
+    .map(arg => arg.trim())
+    .filter(Boolean);
+}
+
+function friendlyTimeoutError(engine, timeout) {
+  return `${engine} timed out after ${Math.round(timeout / 1000)}s. Try a tighter crop, a straighter/brighter image, or upload MusicXML for reliable feedback.`;
+}
+
+async function runOemer(imagePath, { assumeDeskewed = false } = {}) {
   const cmd       = process.env.OEMER_CLI || 'oemer';
-  const extraArgs = process.env.OEMER_ARGS || '';
+  const extraArgs = splitArgs(process.env.OEMER_ARGS || '');
+  const timeout   = timeoutMs('OEMER_TIMEOUT_MS', DEFAULT_OEMER_TIMEOUT_MS);
   const outDir    = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_oemer_'));
+  const disablesDeskew = extraArgs.includes('-d') || extraArgs.includes('--without-deskew');
+  const args = [imagePath, '--output-path', outDir, ...extraArgs];
+
+  if (assumeDeskewed && !disablesDeskew) {
+    args.push('--without-deskew');
+  }
 
   try {
-    await execAsync(`"${cmd}" "${imagePath}" --output-path "${outDir}" ${extraArgs}`.trim(), {
-      timeout: 600_000,   // Oemer can take several minutes on CPU/CoreML.
-      maxBuffer: 50 * 1024 * 1024,
-    });
+    try {
+      await execFileAsync(cmd, args, {
+        timeout,
+        killSignal: 'SIGKILL',
+        maxBuffer: 50 * 1024 * 1024,
+      });
+    } catch (err) {
+      if (err.killed || err.signal === 'SIGTERM' || err.signal === 'SIGKILL') {
+        throw new Error(friendlyTimeoutError('Oemer', timeout));
+      }
+      throw err;
+    }
 
     const base    = path.basename(imagePath, path.extname(imagePath));
     const xmlPath = path.join(outDir, base + '.musicxml');
@@ -169,18 +205,24 @@ async function runOemer(imagePath) {
 // Docs:     https://github.com/Audiveris/audiveris
 
 async function runAudiveris(imagePath) {
-  const cmd    = process.env.AUDIVERIS_CLI || 'audiveris';
-  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_audiveris_'));
-  const base   = path.basename(imagePath, path.extname(imagePath));
+  const cmd     = process.env.AUDIVERIS_CLI || 'audiveris';
+  const timeout = timeoutMs('AUDIVERIS_TIMEOUT_MS', DEFAULT_AUDIVERIS_TIMEOUT_MS);
+  const outDir  = fs.mkdtempSync(path.join(os.tmpdir(), 'vc_audiveris_'));
+  const base    = path.basename(imagePath, path.extname(imagePath));
 
   try {
-    await execAsync(
-      `"${cmd}" -batch -export -output "${outDir}" "${imagePath}"`,
-      {
-        timeout: 300_000,   // 5 min — JVM startup + heavy processing
+    try {
+      await execFileAsync(cmd, ['-batch', '-export', '-output', outDir, imagePath], {
+        timeout,
+        killSignal: 'SIGKILL',
         maxBuffer: 50 * 1024 * 1024,
-      },
-    );
+      });
+    } catch (err) {
+      if (err.killed || err.signal === 'SIGTERM' || err.signal === 'SIGKILL') {
+        throw new Error(friendlyTimeoutError('Audiveris', timeout));
+      }
+      throw err;
+    }
 
     // Audiveris creates outDir/<bookname>/<bookname>.xml  (or .mxl)
     const xmlPath = path.join(outDir, base, base + '.xml');
@@ -227,8 +269,9 @@ async function callRemoteEndpoint(base64, mediaType) {
 
 function buildInstallError(engineErrors) {
   return (
-    'No OMR engine is available on this system.\n\n' +
-    'Install one of the following and restart the API server:\n\n' +
+    'No OMR engine produced a reliable MusicXML scan.\n\n' +
+    'For the best result, upload a .musicxml/.mxl file. For screenshot scanning, use a tight crop of only the white sheet-music page, taken straight-on with good contrast.\n\n' +
+    'Available engine setup options:\n\n' +
     '  • Oemer (Python, recommended for most scores)\n' +
     '      pip install oemer\n\n' +
     '  • Audiveris (Java, best for complex classical scores)\n' +
@@ -291,7 +334,7 @@ export async function processOMR({ imagePath, base64, mediaType }) {
       for (const variant of variants) {
         try {
           console.log(`[OMR] Trying Oemer (${variant.label})…`);
-          const xml = await runOemer(variant.path);
+          const xml = await runOemer(variant.path, { assumeDeskewed: variant.label === 'cleaned' });
           console.log(`[OMR] Oemer succeeded (${variant.label}).`);
           const candidate = acceptOrFallback('oemer', xml, variant.label);
           if (candidate) return candidate;
